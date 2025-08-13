@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,18 +25,18 @@ jobs:
           flutter-version: '3.22.2'
           channel: 'stable'
 
-      # Create Flutter app scaffold in app/
-      - name: Create Flutter project
+      # --- Create minimal Flutter app in ./app ---
+      - name: Create Flutter app
         run: |
           flutter --version
           flutter create app --platforms=android --project-name ctr_color_app --org io.ctrcolor
 
-      # Write pubspec.yaml (deps include http, excel, file_picker, share_plus)
+      # --- pubspec with required packages ---
       - name: Write pubspec.yaml
         run: |
           cat > app/pubspec.yaml << 'YAML'
           name: ctr_color_app
-          description: Excel CTR vs Position colorizer + online AI analysis (fa).
+          description: CTR colorizer + online AI analysis (fa)
           publish_to: "none"
           version: 1.1.0+2
 
@@ -59,10 +60,8 @@ jobs:
             uses-material-design: true
           YAML
 
-      # App source with AI integration; URL injected from secret
+      # --- App source: main.dart with __AI_PROXY_URL__ placeholder ---
       - name: Write app source
-        env:
-          AI_PROXY_URL: ${{ secrets.AI_PROXY_URL }}
         run: |
           mkdir -p app/lib
           cat > app/lib/main.dart << 'DART'
@@ -78,7 +77,8 @@ jobs:
 
           void main() => runApp(const CTRColorApp());
 
-          const String kAiProxyUrl = '__AI_PROXY_URL__'; // replaced by workflow
+          // This will be replaced by the workflow with your secret.
+          const String kAiProxyUrl = '__AI_PROXY_URL__';
 
           class CTRColorApp extends StatelessWidget {
             const CTRColorApp({super.key});
@@ -164,11 +164,14 @@ jobs:
               setState(()=>_results=out);
             }
 
-            // ---- AI Online Analysis ----
+            // ---- AI analyze (POST to proxy) ----
             Future<void> _analyzeOnline() async {
               if (_results.isEmpty) { _snack('Please compute colors first.'); return; }
               if (_benchmarks.isEmpty) { _snack('Benchmarks are required.'); return; }
-              if (kAiProxyUrl.startsWith('__')) { _snack('AI endpoint is not configured.'); return; }
+              if (kAiProxyUrl.startsWith('__') || !kAiProxyUrl.startsWith('http')) {
+                _snack('AI endpoint is not configured.');
+                return;
+              }
 
               final payload = _buildAnalysisPayload();
 
@@ -326,24 +329,37 @@ jobs:
               ],onChanged:onChanged),
             ]);
 
-            Widget _chip(String label,int count,Color c)=>Chip(label:Text('$label: $count'),backgroundColor:c.withOpacity(0.2),side:BorderSide(color:c.withOpacity(0.6)));
+            Widget _chip(String label,int count,Color c)=>Chip(label:Text('$label: $count'),backgroundColor=c.withOpacity(0.2),side:BorderSide(color:c.withOpacity(0.6)));
           }
 
           class ListToCsvConverter{ const ListToCsvConverter(); String convert(List<List<String>> rows){ final b=StringBuffer(); for(final r in rows){ b.writeln(r.map(_e).join(',')); } return b.toString(); }
             String _e(String s){ final n=s.contains(',')||s.contains('"')||s.contains('\n')||s.contains('\r'); if(!n) return s; final esc=s.replaceAll('"','""'); return '"$esc"'; } }
           DART
 
-          # inject AI URL from secret
-          sed -i "s|__AI_PROXY_URL__|${AI_PROXY_URL}|g" app/lib/main.dart
+      # --- Inject AI URL safely from secret (no sed errors) ---
+      - name: Inject AI URL safely
+        env:
+          AI_PROXY_URL: ${{ secrets.AI_PROXY_URL }}
+        run: |
+          URL="${AI_PROXY_URL}"
+          URL_ESC=$(printf '%s' "$URL" | sed -e 's/[\/&]/\\&/g')
+          sed -i "s|__AI_PROXY_URL__|$URL_ESC|g" app/lib/main.dart
+          echo "Injected URL -> $URL"
 
-      # INTERNET permission in manifest
+      - name: Print injected AI URL (sanity check)
+        run: |
+          echo "---- main.dart AI URL line ----"
+          grep -n "kAiProxyUrl" app/lib/main.dart || true
+          echo "--------------------------------"
+
+      # --- Ensure INTERNET permission in Android ---
       - name: Ensure INTERNET permission
         run: |
           MANIFEST=app/android/app/src/main/AndroidManifest.xml
           grep -q 'android.permission.INTERNET' "$MANIFEST" || \
             sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <application|g' "$MANIFEST"
 
-      # Kotlin mismatch workaround
+      # --- Kotlin versions fix (avoid duplicate classes) ---
       - name: Bump Kotlin plugin version
         run: |
           sed -i "s/id 'org.jetbrains.kotlin.android' version '[^']*'/id 'org.jetbrains.kotlin.android' version '1.8.22'/g" app/android/build.gradle
@@ -371,5 +387,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-apk
+          name: app-release.apk
           path: app/build/app/outputs/flutter-apk/app-release.apk
