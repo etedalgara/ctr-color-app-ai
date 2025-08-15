@@ -61,7 +61,7 @@ jobs:
             uses-material-design: true
           YAML
 
-      # --- App source: main.dart (RTL, Justify, nicer AI dialog) ---
+      # --- App source: main.dart (RTL, Justify, excel alias to avoid Border conflict) ---
       - name: Write app source
         run: |
           mkdir -p app/lib
@@ -70,7 +70,7 @@ jobs:
           import 'dart:typed_data';
 
           import 'package:collection/collection.dart';
-          import 'package:excel/excel.dart';
+          import 'package:excel/excel.dart' as xls;           // <- alias prevents Border conflict
           import 'package:file_picker/file_picker.dart';
           import 'package:flutter/material.dart';
           import 'package:share_plus/share_plus.dart';
@@ -130,7 +130,7 @@ jobs:
 
           class HomeScreen extends StatefulWidget { const HomeScreen({super.key}); @override State<HomeScreen> createState()=>_HomeScreenState(); }
           class _HomeScreenState extends State<HomeScreen>{
-            Excel? _excel; String? _dataSheetName; List<String> _headers=[]; List<List<String>> _table=[];
+            xls.Excel? _excel; String? _dataSheetName; List<String> _headers=[]; List<List<String>> _table=[];
             int? _colText,_colCTR,_colPos; List<Benchmark> _benchmarks=[]; bool _bmFromSheet=false; List<ResultRow> _results=[];
             String? _bmSheetName;
 
@@ -158,27 +158,36 @@ jobs:
               final res=await FilePicker.platform.pickFiles(type:FileType.custom,allowedExtensions:['xlsx'],withData:true);
               if(res==null||res.files.isEmpty) return;
               final bytes=res.files.single.bytes; if(bytes==null){_snack('Failed to read file bytes'); return;}
-              final excel=Excel.decodeBytes(bytes); setState(()=>_excel=excel);
-              final names=excel.tables.keys.toList(); final chosen=names.firstWhere((t)=>(excel.tables[t]?.maxRows??0)>0,orElse:()=>names.isNotEmpty?names.first:'');
+              final excel=xls.Excel.decodeBytes(bytes);
+              setState(()=>_excel=excel);
+              final names=excel.tables.keys.toList();
+              final chosen=names.firstWhere((t)=>(excel.tables[t]?.maxRows??0)>0,orElse:()=>names.isNotEmpty?names.first:'');
               if(chosen.isEmpty){_snack('No sheets found'); return;} _dataSheetName=chosen;
               _loadTable(); _loadBenchmarks(excel); _autoMap();
             }
 
-            void _loadTable(){ final sh=_excel!.tables[_dataSheetName]!; _headers=[]; _table=[];
-              for(var r=0;r<sh.maxRows;r++){ final row=<String>[]; for(var c=0;c<sh.maxCols;c++){ row.add('${sh.cell(CellIndex.indexByColumnRow(columnIndex:c,rowIndex:r)).value??''}'.trim()); }
+            void _loadTable(){
+              final sh=_excel!.tables[_dataSheetName]!;
+              _headers=[]; _table=[];
+              for(var r=0;r<sh.maxRows;r++){
+                final row=<String>[];
+                for(var c=0;c<sh.maxCols;c++){
+                  row.add('${sh.cell(xls.CellIndex.indexByColumnRow(columnIndex:c,rowIndex:r)).value??''}'.trim());
+                }
                 if(r==0) _headers=row; else _table.add(row);
-              } }
+              }
+            }
 
-            void _loadBenchmarks(Excel excel){
+            void _loadBenchmarks(xls.Excel excel){
               _bmFromSheet=false; final bm=excel.tables['Benchmarks'];
               if(bm==null||bm.maxRows<2){ _benchmarks=[]; _bmSheetName=null; return; }
               final rows=bm.maxRows, cols=bm.maxCols; final list=<Benchmark>[];
               for(var r=1;r<rows;r++){
                 String a='',b='',c='',d='';
-                if(cols>0)a='${bm.cell(CellIndex.indexByColumnRow(columnIndex:0,rowIndex:r)).value??''}';
-                if(cols>1)b='${bm.cell(CellIndex.indexByColumnRow(columnIndex:1,rowIndex:r)).value??''}';
-                if(cols>2)c='${bm.cell(CellIndex.indexByColumnRow(columnIndex:2,rowIndex:r)).value??''}';
-                if(cols>3)d='${bm.cell(CellIndex.indexByColumnRow(columnIndex:3,rowIndex:r)).value??''}';
+                if(cols>0)a='${bm.cell(xls.CellIndex.indexByColumnRow(columnIndex:0,rowIndex:r)).value??''}';
+                if(cols>1)b='${bm.cell(xls.CellIndex.indexByColumnRow(columnIndex:1,rowIndex:r)).value??''}';
+                if(cols>2)c='${bm.cell(xls.CellIndex.indexByColumnRow(columnIndex:2,rowIndex:r)).value??''}';
+                if(cols>3)d='${bm.cell(xls.CellIndex.indexByColumnRow(columnIndex:3,rowIndex:r)).value??''}';
                 final fp=_num(a), tp=_num(b), mn=_ctr(c), mx=_ctr(d); if(fp.isNaN||tp.isNaN||mn.isNaN||mx.isNaN) continue;
                 list.add(Benchmark(fp,tp,mn,mx));
               }
@@ -493,7 +502,7 @@ jobs:
           }
           GRADLE
 
-      # --- Gradle cache + retries to avoid transient network errors ---
+      # --- Gradle cache + retries to avoid transient network errors (warnings here OK) ---
       - name: Setup Gradle (cache)
         uses: gradle/actions/setup-gradle@v3
 
