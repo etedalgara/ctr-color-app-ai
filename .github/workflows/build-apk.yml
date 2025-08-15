@@ -1,4 +1,4 @@
-name: Build Android APK (stable Excel + optional AI)
+name: Build Android APK (raw CTR, tidy display, optional AI)
 
 on:
   push:
@@ -34,9 +34,9 @@ jobs:
         run: |
           cat > app/pubspec.yaml << 'YAML'
           name: ctr_color_app
-          description: CTR colorizer (stable) + optional online AI (fa)
+          description: CTR colorizer (raw numbers, tidy display) + optional online AI (fa)
           publish_to: "none"
-          version: 1.2.5+8
+          version: 1.3.0+9
 
           environment:
             sdk: ">=3.3.0 <4.0.0"
@@ -59,7 +59,7 @@ jobs:
             uses-material-design: true
           YAML
 
-      - name: Write app source (stable main.dart)
+      - name: Write app source (main.dart)
         run: |
           mkdir -p app/lib
           cat > app/lib/main.dart << 'DART'
@@ -119,12 +119,28 @@ jobs:
               setState(()=>_customAiUrl = sp.getString(_kPrefsAiUrl));
             }
 
-            // -------- util: parsing numbers/ctr --------
+            // -------- number parsing (RAW; no percent logic) --------
             String _normDigits(String s){ const m={'۰':'0','۱':'1','۲':'2','۳':'3','۴':'4','۵':'5','۶':'6','۷':'7','۸':'8','۹':'9','٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9'}; var o=s; m.forEach((k,v)=>o=o.replaceAll(k,v)); return o; }
-            double _num(String v){ try{ var s=_normDigits(v.trim()).replaceAll(',','').replaceAll('٬','').replaceAll('،','').replaceAll('٫','.'); return double.parse(s);}catch(_){return double.nan;} }
-            double _ctr(String v){ var s=_normDigits(v).trim(); var hasPct=s.contains('%')||s.contains('٪'); s=s.replaceAll('%','').replaceAll('٪',''); var x=_num(s); if(x.isNaN) return double.nan; if(hasPct) return x/100; if(x>1) return x/100; return x; }
+            double _num(String v){
+              try{
+                var s=_normDigits(v.trim())
+                    .replaceAll('%','').replaceAll('٪','')   // only remove symbol; no scaling
+                    .replaceAll(',','').replaceAll('٬','').replaceAll('،','')
+                    .replaceAll('٫','.');
+                return double.parse(s);
+              }catch(_){ return double.nan; }
+            }
+            // CTR is just a raw number now.
+            double _ctr(String v) => _num(v);
 
-            // -------- Excel load (stable) --------
+            // nice display: int → no decimals, float → 1 decimal max
+            String _fmt(double x){
+              if (x.isNaN) return '';
+              final isInt = (x % 1) == 0;
+              return isInt ? x.toStringAsFixed(0) : x.toStringAsFixed(1);
+            }
+
+            // -------- Excel load --------
             Future<void> _pickExcel() async{
               try{
                 setState(()=>{_excel=null,_headers=[],_table=[],_colText=null,_colCTR=null,_colPos=null,_benchmarks=[],_bmFromSheet=false,_results=[],_bmSheetName=null});
@@ -140,9 +156,9 @@ jobs:
                 if(chosen.isEmpty){ _snack('No sheets found'); return; }
                 _dataSheetName = chosen;
 
-                _loadTable();          // rows + headers
-                _loadBenchmarks(excel); // optional BM
-                _autoMap();            // guess columns
+                _loadTable();
+                _loadBenchmarks(excel);
+                _autoMap();
               } catch(e){
                 _snack('Excel load error: $e');
               }
@@ -171,7 +187,8 @@ jobs:
                 if(cols>1)b='${bm.cell(xls.CellIndex.indexByColumnRow(columnIndex:1,rowIndex:r)).value??''}';
                 if(cols>2)c='${bm.cell(xls.CellIndex.indexByColumnRow(columnIndex:2,rowIndex:r)).value??''}';
                 if(cols>3)d='${bm.cell(xls.CellIndex.indexByColumnRow(columnIndex:3,rowIndex:r)).value??''}';
-                final fp=_num(a), tp=_num(b), mn=_ctr(c), mx=_ctr(d);
+                // RAW numbers (no percent)
+                final fp=_num(a), tp=_num(b), mn=_num(c), mx=_num(d);
                 if(fp.isNaN||tp.isNaN||mn.isNaN||mx.isNaN) continue;
                 list.add(Benchmark(fp,tp,mn,mx));
               }
@@ -206,7 +223,7 @@ jobs:
                 if (t.trim().isEmpty) issues.add('Row ${i+2}: empty Text/URL');
                 if (ctr.isNaN) badCtr++; if (pos.isNaN) badPos++;
               }
-              if (badCtr > 0) issues.add('Invalid CTR in $badCtr row(s). Use 0.12 or 12% format.');
+              if (badCtr > 0) issues.add('Invalid CTR in $badCtr row(s).');
               if (badPos > 0) issues.add('Invalid Position in $badPos row(s).');
               if (_benchmarks.isEmpty) issues.add('Benchmarks are missing. Add a "Benchmarks" sheet.');
               return issues;
@@ -236,7 +253,7 @@ jobs:
               setState(()=>_results=out);
             }
 
-            // -------- Optional AI (unchanged behavior) --------
+            // -------- Optional AI (same behavior) --------
             Future<void> _analyzeOnline() async {
               if (_results.isEmpty) { _snack('Please compute colors first.'); return; }
               if (_benchmarks.isEmpty) { _snack('Benchmarks are required.'); return; }
@@ -276,6 +293,7 @@ jobs:
               }).toList()..sort((a,b)=> (a["pos"] as int).compareTo(b["pos"] as int));
 
               List<Map<String, dynamic>> under=[], over=[], border=[];
+              const eps = 0.1; // near-border threshold in RAW units
               for (final r in _results) {
                 final bm = r.bm; if (bm == null) continue;
                 final c = _ctr(r.row.ctrRaw); if (c.isNaN) continue;
@@ -283,9 +301,10 @@ jobs:
                 else if (c > bm.maxCTR) over.add({"url": r.row.text, "pos": r.row.posRaw, "ctr": c, "max": bm.maxCTR});
                 else {
                   final d1=(c-bm.minCTR).abs(), d2=(bm.maxCTR-c).abs();
-                  if (d1 < 0.005 || d2 < 0.005) border.add({"url": r.row.text, "pos": r.row.posRaw, "ctr": c, "min": bm.minCTR, "max": bm.maxCTR});
+                  if (d1 < eps || d2 < eps) border.add({"url": r.row.text, "pos": r.row.posRaw, "ctr": c, "min": bm.minCTR, "max": bm.maxCTR});
                 }
               }
+              // cap counts a bit to keep payload smaller
               under = under.take(25).toList(); over  = over.take(25).toList(); border= border.take(25).toList();
 
               return {
@@ -394,8 +413,8 @@ jobs:
                       SingleChildScrollView(scrollDirection:Axis.horizontal,child:DataTable(columns:const[
                         DataColumn(label:Text('FromPos')),DataColumn(label:Text('ToPos')),DataColumn(label:Text('MinCTR')),DataColumn(label:Text('MaxCTR')),
                       ],rows:_benchmarks.map((b)=>DataRow(cells:[
-                        DataCell(Text(b.fromPos.toString())),DataCell(Text(b.toPos.toString())),
-                        DataCell(Text((b.minCTR*100).toStringAsFixed(2)+'%')),DataCell(Text((b.maxCTR*100).toStringAsFixed(2)+'%')),
+                        DataCell(Text(_fmt(b.fromPos))),DataCell(Text(_fmt(b.toPos))),
+                        DataCell(Text(_fmt(b.minCTR))),DataCell(Text(_fmt(b.maxCTR))),
                       ])).toList()))
                     ]))),
 
@@ -410,7 +429,12 @@ jobs:
                     if(_results.isNotEmpty) ListView.builder(shrinkWrap:true,physics:const NeverScrollableScrollPhysics(),itemCount:_results.length,itemBuilder:(ctx,i){
                       final r=_results[i];
                       final bg = switch(r.colorClass){ ColorClass.red=>Colors.red.shade100, ColorClass.gray=>Colors.grey.shade300, ColorClass.green=>const Color(0xFFB7E4C7), ColorClass.warn=>const Color(0xFFFFEBA0) };
-                      return Card(color:bg,child:ListTile(dense:true,title:Text(r.row.text,maxLines:2,overflow:TextOverflow.ellipsis),subtitle:Text('CTR: ${r.row.ctrRaw}   |   Position: ${r.row.posRaw}')));
+                      final c=_ctr(r.row.ctrRaw); final p=_num(r.row.posRaw);
+                      return Card(color:bg,child:ListTile(
+                        dense:true,
+                        title:Text(r.row.text,maxLines:2,overflow:TextOverflow.ellipsis),
+                        subtitle:Text('CTR: ${_fmt(c)}   |   Position: ${_fmt(p)}'),
+                      ));
                     }),
                   ]),
                 ),
