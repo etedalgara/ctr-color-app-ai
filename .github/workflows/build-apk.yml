@@ -1,4 +1,4 @@
-name: Build Android APK (AI-enabled)
+name: Build Android APK (AI-enabled, RTL & Justify)
 
 on:
   push:
@@ -38,7 +38,7 @@ jobs:
           name: ctr_color_app
           description: CTR colorizer + online AI analysis (fa)
           publish_to: "none"
-          version: 1.1.0+2
+          version: 1.2.0+3
 
           environment:
             sdk: ">=3.3.0 <4.0.0"
@@ -51,6 +51,7 @@ jobs:
             share_plus: ^9.0.0
             collection: ^1.18.0
             http: ^1.2.2
+            shared_preferences: ^2.2.3
 
           dev_dependencies:
             flutter_test:
@@ -60,7 +61,7 @@ jobs:
             uses-material-design: true
           YAML
 
-      # --- App source: main.dart with __AI_PROXY_URL__ placeholder ---
+      # --- App source: main.dart (RTL, Justify, nicer AI dialog) ---
       - name: Write app source
         run: |
           mkdir -p app/lib
@@ -74,11 +75,45 @@ jobs:
           import 'package:flutter/material.dart';
           import 'package:share_plus/share_plus.dart';
           import 'package:http/http.dart' as http;
+          import 'package:shared_preferences/shared_preferences.dart';
 
           void main() => runApp(const CTRColorApp());
 
           // This will be replaced by the workflow with your secret.
           const String kAiProxyUrl = '__AI_PROXY_URL__';
+
+          // -------------------- Models & Utils --------------------
+          class PageRow { final String text; final String ctrRaw; final String posRaw; final int rowIndex;
+            PageRow({required this.text, required this.ctrRaw, required this.posRaw, required this.rowIndex}); }
+          class Benchmark { final double fromPos,toPos,minCTR,maxCTR; Benchmark(this.fromPos,this.toPos,this.minCTR,this.maxCTR); }
+          enum ColorClass { red, gray, green, warn }
+          class ResultRow { final PageRow row; final ColorClass colorClass; final Benchmark? bm; ResultRow(this.row,this.colorClass,this.bm); }
+
+          class AnalysisItem {
+            final String title;
+            final String body;
+            AnalysisItem(this.title, this.body);
+          }
+
+          String _clean(String s) => s.replaceAll(RegExp(r'\\*\\*(.*?)\\*\\*'), r'$1').trim();
+          String _fixBidi(String s) {
+            final re = RegExp(r'(https?://\\S+|[A-Za-z0-9][A-Za-z0-9/_\\-.]+)');
+            return s.replaceAllMapped(re, (m) => '\\u2068${m[0]}\\u2069');
+          }
+          List<AnalysisItem> _parseAnalysis(String raw) {
+            final text = _clean(raw);
+            final lines = text.split('\\n').map((e) => e.trim()).toList();
+            final items = <AnalysisItem>[];
+            String? curTitle; final buf = StringBuffer();
+            void push(){ if(curTitle!=null){ items.add(AnalysisItem(_fixBidi(curTitle!), _fixBidi(buf.toString().trim())));} curTitle=null; buf.clear(); }
+            for(final ln in lines){
+              if(RegExp(r'^(\\d+)[\\.\\)\\-]\\s+').hasMatch(ln)){ push(); curTitle = ln.replaceFirst(RegExp(r'^(\\d+)[\\.\\)\\-]\\s+'),''); }
+              else if(ln.isEmpty){ buf.writeln(); } else { buf.writeln(ln); }
+            }
+            push();
+            if(items.isEmpty){ items.add(AnalysisItem('جمع‌بندی', _fixBidi(text))); }
+            return items;
+          }
 
           class CTRColorApp extends StatelessWidget {
             const CTRColorApp({super.key});
@@ -88,21 +123,31 @@ jobs:
                 title: 'CTR Color App',
                 theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal), useMaterial3: true),
                 home: const HomeScreen(),
+                locale: const Locale('fa'),
               );
             }
           }
-
-          class PageRow { final String text; final String ctrRaw; final String posRaw; final int rowIndex;
-            PageRow({required this.text, required this.ctrRaw, required this.posRaw, required this.rowIndex}); }
-          class Benchmark { final double fromPos,toPos,minCTR,maxCTR; Benchmark(this.fromPos,this.toPos,this.minCTR,this.maxCTR); }
-          enum ColorClass { red, gray, green, warn }
-          class ResultRow { final PageRow row; final ColorClass colorClass; final Benchmark? bm; ResultRow(this.row,this.colorClass,this.bm); }
 
           class HomeScreen extends StatefulWidget { const HomeScreen({super.key}); @override State<HomeScreen> createState()=>_HomeScreenState(); }
           class _HomeScreenState extends State<HomeScreen>{
             Excel? _excel; String? _dataSheetName; List<String> _headers=[]; List<List<String>> _table=[];
             int? _colText,_colCTR,_colPos; List<Benchmark> _benchmarks=[]; bool _bmFromSheet=false; List<ResultRow> _results=[];
             String? _bmSheetName;
+
+            String? _customAiUrl; static const _kPrefsAiUrl='custom_ai_url';
+            String? _lastAiSummaryText;
+
+            @override void initState(){ super.initState(); _loadPrefs(); }
+
+            Future<void> _loadPrefs() async {
+              final sp = await SharedPreferences.getInstance();
+              setState(()=>_customAiUrl = sp.getString(_kPrefsAiUrl));
+            }
+            Future<void> _saveAiUrl(String? v) async {
+              final sp = await SharedPreferences.getInstance();
+              if(v==null || v.trim().isEmpty){ await sp.remove(_kPrefsAiUrl); setState(()=>_customAiUrl=null); }
+              else { await sp.setString(_kPrefsAiUrl, v.trim()); setState(()=>_customAiUrl=v.trim()); }
+            }
 
             String _normDigits(String s){ const m={'۰':'0','۱':'1','۲':'2','۳':'3','۴':'4','۵':'5','۶':'6','۷':'7','۸':'8','۹':'9','٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9'}; var o=s; m.forEach((k,v)=>o=o.replaceAll(k,v)); return o; }
             double _num(String v){ try{ var s=_normDigits(v.trim()).replaceAll(',', '').replaceAll('٬','').replaceAll('،','').replaceAll('٫','.'); return double.parse(s);}catch(_){return double.nan;} }
@@ -129,7 +174,8 @@ jobs:
               if(bm==null||bm.maxRows<2){ _benchmarks=[]; _bmSheetName=null; return; }
               final rows=bm.maxRows, cols=bm.maxCols; final list=<Benchmark>[];
               for(var r=1;r<rows;r++){
-                String a='',b='',c='',d=''; if(cols>0)a='${bm.cell(CellIndex.indexByColumnRow(columnIndex:0,rowIndex:r)).value??''}';
+                String a='',b='',c='',d='';
+                if(cols>0)a='${bm.cell(CellIndex.indexByColumnRow(columnIndex:0,rowIndex:r)).value??''}';
                 if(cols>1)b='${bm.cell(CellIndex.indexByColumnRow(columnIndex:1,rowIndex:r)).value??''}';
                 if(cols>2)c='${bm.cell(CellIndex.indexByColumnRow(columnIndex:2,rowIndex:r)).value??''}';
                 if(cols>3)d='${bm.cell(CellIndex.indexByColumnRow(columnIndex:3,rowIndex:r)).value??''}';
@@ -147,9 +193,36 @@ jobs:
               setState((){});
             }
 
+            List<String> _validateData() {
+              final issues = <String>[];
+              if (_headers.isEmpty) issues.add('No data sheet loaded.');
+              if (_colText == null || _colCTR == null || _colPos == null) {
+                issues.add('Please map all three columns (Text/CTR/Position).'); return issues;
+              }
+              var badCtr = 0, badPos = 0;
+              for (var i = 0; i < _table.length; i++) {
+                final row = _table[i];
+                final t = _colText! < row.length ? row[_colText!] : '';
+                final c = _colCTR!  < row.length ? row[_colCTR!]  : '';
+                final p = _colPos!  < row.length ? row[_colPos!]  : '';
+                final ctr = _ctr(c), pos = _num(p);
+                if (t.trim().isEmpty) issues.add('Row ${i+2}: empty Text/URL');
+                if (ctr.isNaN) badCtr++; if (pos.isNaN) badPos++;
+              }
+              if (badCtr > 0) issues.add('Invalid CTR in $badCtr row(s). Use 0.12 or 12% format.');
+              if (badPos > 0) issues.add('Invalid Position in $badPos row(s).');
+              if (_benchmarks.isEmpty) issues.add('Benchmarks are missing. Add a "Benchmarks" sheet.');
+              return issues;
+            }
+            void _showIssues(List<String> issues){ showDialog(context: context, builder: (_){ return Directionality(textDirection: TextDirection.rtl, child: AlertDialog(
+              title: const Text('ایرادهای داده'),
+              content: SizedBox(width:480,child: SingleChildScrollView(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: issues.map((e)=>Text('• $e')).toList(),))),
+              actions:[TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('باشه'))],
+            ));}); }
+
             void _compute(){
-              if(_colText==null||_colCTR==null||_colPos==null){ _snack('Map all three columns.'); return; }
-              if(_benchmarks.isEmpty){ _snack('Please load Benchmarks sheet in your Excel.'); return; }
+              final issues = _validateData();
+              if (issues.isNotEmpty){ _showIssues(issues); return; }
               final out=<ResultRow>[];
               for(var i=0;i<_table.length;i++){
                 final row=_table[i]; if(_colText!>=row.length||_colCTR!>=row.length||_colPos!>=row.length) continue;
@@ -164,61 +237,48 @@ jobs:
               setState(()=>_results=out);
             }
 
-            // ---- AI analyze (POST to proxy) ----
             Future<void> _analyzeOnline() async {
               if (_results.isEmpty) { _snack('Please compute colors first.'); return; }
               if (_benchmarks.isEmpty) { _snack('Benchmarks are required.'); return; }
-              if (kAiProxyUrl.startsWith('__') || !kAiProxyUrl.startsWith('http')) {
-                _snack('AI endpoint is not configured.');
-                return;
-              }
-
+              final String aiUrl = (_customAiUrl?.isNotEmpty==true) ? _customAiUrl! : kAiProxyUrl;
+              if (!aiUrl.startsWith('http')) { _snack('AI endpoint is not configured.'); return; }
               final payload = _buildAnalysisPayload();
 
-              showDialog(context: context, barrierDismissible: false,
-                builder: (_) => const Center(child: CircularProgressIndicator()));
+              showDialog(context: context, barrierDismissible: false, builder: (_)=>const Center(child:CircularProgressIndicator()));
 
-              try {
-                final res = await http.post(
-                  Uri.parse(kAiProxyUrl),
-                  headers: {'Content-Type': 'application/json'},
-                  body: jsonEncode(payload),
-                );
-                if (!mounted) return;
-                Navigator.of(context).pop();
-
-                if (res.statusCode == 200) {
-                  final data = jsonDecode(res.body);
-                  _showAnalysisResult(data);
-                } else {
-                  _snack('AI service error: ${res.statusCode}');
-                }
-              } catch (e) {
-                if (mounted) Navigator.of(context).pop();
-                _snack('Network error: $e');
+              String? lastErr;
+              for(int attempt=1; attempt<=3; attempt++){
+                try{
+                  final res = await http.post(Uri.parse(aiUrl), headers:{'Content-Type':'application/json'}, body: jsonEncode(payload)).timeout(const Duration(seconds:15));
+                  if(!mounted) return;
+                  if(res.statusCode==200){ Navigator.of(context).pop(); final data=jsonDecode(res.body); _showAnalysisResult(data); return; }
+                  else{
+                    final bodyText = res.body.isNotEmpty ? res.body : '';
+                    lastErr = 'AI service error: ${res.statusCode}${bodyText.isNotEmpty ? ' • $bodyText' : ''}';
+                    if(res.statusCode>=400 && res.statusCode<500) break;
+                  }
+                }catch(e){ lastErr='Network/timeout error: $e'; }
+                await Future.delayed(Duration(milliseconds: 300*attempt));
               }
+              if(mounted){ Navigator.of(context).pop(); _snack(lastErr ?? 'AI request failed.'); }
             }
 
             Map<String, dynamic> _buildAnalysisPayload() {
               final posBuckets = <int, List<double>>{};
               for (final r in _results) {
-                final p = _num(r.row.posRaw);
-                final c = _ctr(r.row.ctrRaw);
+                final p = _num(r.row.posRaw); final c = _ctr(r.row.ctrRaw);
                 if (p.isNaN || c.isNaN) continue;
                 posBuckets.putIfAbsent(p.toInt(), () => []).add(c);
               }
               final byPos = posBuckets.entries.map((e) {
-                final vals = e.value;
-                final avg = vals.isEmpty ? 0.0 : (vals.reduce((a,b)=>a+b)/vals.length);
+                final vals = e.value; final avg = vals.isEmpty ? 0.0 : (vals.reduce((a,b)=>a+b)/vals.length);
                 return {"pos": e.key, "avg": avg, "n": vals.length};
               }).toList()..sort((a,b)=> (a["pos"] as int).compareTo(b["pos"] as int));
 
               List<Map<String, dynamic>> under=[], over=[], border=[];
               for (final r in _results) {
-                final bm = r.bm;
-                if (bm == null) continue;
-                final c = _ctr(r.row.ctrRaw);
-                if (c.isNaN) continue;
+                final bm = r.bm; if (bm == null) continue;
+                final c = _ctr(r.row.ctrRaw); if (c.isNaN) continue;
                 if (c < bm.minCTR) under.add({"url": r.row.text, "pos": r.row.posRaw, "ctr": c, "min": bm.minCTR});
                 else if (c > bm.maxCTR) over.add({"url": r.row.text, "pos": r.row.posRaw, "ctr": c, "max": bm.maxCTR});
                 else {
@@ -226,9 +286,7 @@ jobs:
                   if (d1 < 0.005 || d2 < 0.005) border.add({"url": r.row.text, "pos": r.row.posRaw, "ctr": c, "min": bm.minCTR, "max": bm.maxCTR});
                 }
               }
-              under = under.take(25).toList();
-              over  = over.take(25).toList();
-              border= border.take(25).toList();
+              under = under.take(25).toList(); over  = over.take(25).toList(); border= border.take(25).toList();
 
               return {
                 "meta": {"datasetName": _dataSheetName ?? "dataset", "rows": _results.length},
@@ -239,16 +297,45 @@ jobs:
             }
 
             void _showAnalysisResult(Map<String, dynamic> data) {
-              final text = (data["summaryText"] ?? "تحلیل در دسترس نیست.") as String;
-              showDialog(context: context, builder: (_) {
-                return AlertDialog(
+              final raw = (data["summaryText"] ?? "").toString().trim();
+              final parsed = _parseAnalysis(raw);
+              _lastAiSummaryText = raw.isEmpty ? null : raw;
+
+              final chips = ['🟩','🟨','🟦','🟧','🟥'];
+              showDialog(context: context, builder: (_){
+                return Directionality(textDirection: TextDirection.rtl, child: AlertDialog(
                   title: const Text('تحلیل هوش مصنوعی'),
-                  content: SingleChildScrollView(child: Text(text)),
-                  actions: [TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('بستن'))],
-                );
+                  content: SizedBox(width:520, child: SingleChildScrollView(child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (int i=0;i<parsed.length;i++) ...[
+                        _analysisCard(emoji: chips[i%chips.length], title: parsed[i].title, body: parsed[i].body),
+                        const SizedBox(height:10),
+                      ],
+                    ],
+                  ))),
+                  actions:[TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('بستن'))],
+                  insetPadding: const EdgeInsets.symmetric(horizontal:16, vertical:24),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                ));
               });
             }
-            // ---- end AI ----
+
+            Widget _analysisCard({required String emoji, required String title, required String body}) {
+              return Container(
+                decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(14), border: Border.all(color: Colors.grey.shade300)),
+                padding: const EdgeInsets.fromLTRB(12,10,12,12),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(emoji, style: const TextStyle(fontSize: 20)),
+                  const SizedBox(width:8),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(title.isEmpty?'—':title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                    const SizedBox(height:6),
+                    SelectableText(body.isEmpty?'—':body, textAlign: TextAlign.justify, style: const TextStyle(height: 1.6)),
+                  ])),
+                ]),
+              );
+            }
 
             Future<void> _exportCSV() async{
               if(_results.isEmpty){ _snack('No results to export.'); return; }
@@ -260,6 +347,31 @@ jobs:
               final csv = const ListToCsvConverter().convert(lines);
               final data = utf8.encode(csv);
               await Share.shareXFiles([XFile.fromData(Uint8List.fromList(data), name:'ctr_color_results.csv', mimeType:'text/csv')], text:'CTR color results');
+            }
+
+            Future<void> _exportAnalysis() async {
+              final text = _lastAiSummaryText;
+              if(text==null || text.trim().isEmpty){ _snack('No AI analysis to export.'); return; }
+              final bytes = Uint8List.fromList(utf8.encode(text));
+              await Share.shareXFiles([XFile.fromData(bytes, name:'ctr_ai_analysis.txt', mimeType:'text/plain')], text:'AI analysis');
+            }
+
+            void _openSettings(){
+              final ctrl = TextEditingController(text: _customAiUrl ?? '');
+              showDialog(context: context, builder: (_){
+                return Directionality(textDirection: TextDirection.rtl, child: AlertDialog(
+                  title: const Text('تنظیمات'),
+                  content: SizedBox(width:480, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Text('آدرس سرویس هوش مصنوعی (خالی = استفاده از آدرس پیش‌فرض برنامه):'),
+                    const SizedBox(height:8),
+                    TextField(controller: ctrl, decoration: const InputDecoration(border: OutlineInputBorder(), hintText:'https://your-proxy.vercel.app/api/analyze')),
+                    const SizedBox(height:8),
+                    Text('Current: ${(_customAiUrl?.isNotEmpty==true)?_customAiUrl:kAiProxyUrl}', style: const TextStyle(fontSize: 12)),
+                  ])),
+                  actions: [TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('انصراف')),
+                    TextButton(onPressed: (){ _saveAiUrl(ctrl.text); Navigator.pop(context); }, child: const Text('ذخیره'))],
+                ));
+              });
             }
 
             void _snack(String m)=>ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
@@ -280,10 +392,11 @@ jobs:
                       ElevatedButton.icon(onPressed:_compute,icon:const Icon(Icons.color_lens),label:const Text('Compute Colors')),
                     ]),
                     const SizedBox(height:8),
-                    Row(children: [
+                    Wrap(spacing:12, runSpacing:8, children: [
                       OutlinedButton.icon(onPressed:_exportCSV,icon:const Icon(Icons.ios_share),label:const Text('Export CSV')),
-                      const SizedBox(width:12),
                       ElevatedButton.icon(onPressed:_analyzeOnline,icon:const Icon(Icons.analytics),label:const Text('Analyze with AI')),
+                      OutlinedButton.icon(onPressed:_openSettings,icon:const Icon(Icons.settings),label:const Text('Settings')),
+                      OutlinedButton.icon(onPressed:_exportAnalysis,icon:const Icon(Icons.description),label:const Text('Export Analysis')),
                     ]),
                     const SizedBox(height:12),
                     if(_headers.isNotEmpty) Text('Data sheet: ${_dataSheetName ?? "-"}'),
@@ -329,11 +442,15 @@ jobs:
               ],onChanged:onChanged),
             ]);
 
-           Widget _chip(String label, int count, Color c) => Chip(label: Text('$label: $count'), backgroundColor: c.withOpacity(0.2),shape: StadiumBorder(side: BorderSide(color: c.withOpacity(0.6)),),);
+            Widget _chip(String label,int count,Color c)=>Chip(
+              label: Text('$label: $count'),
+              backgroundColor: c.withOpacity(0.2),
+              shape: const StadiumBorder(side: BorderSide(color: Colors.black12)),
+            );
           }
 
           class ListToCsvConverter{ const ListToCsvConverter(); String convert(List<List<String>> rows){ final b=StringBuffer(); for(final r in rows){ b.writeln(r.map(_e).join(',')); } return b.toString(); }
-            String _e(String s){ final n=s.contains(',')||s.contains('"')||s.contains('\n')||s.contains('\r'); if(!n) return s; final esc=s.replaceAll('"','""'); return '"$esc"'; } }
+            String _e(String s){ final n=s.contains(',')||s.contains('"')||s.contains('\\n')||s.contains('\\r'); if(!n) return s; final esc=s.replaceAll('"','""'); return '"$esc"'; } }
           DART
 
       # --- Inject AI URL safely from secret (no sed errors) ---
@@ -376,13 +493,27 @@ jobs:
           }
           GRADLE
 
+      # --- Gradle cache + retries to avoid transient network errors ---
+      - name: Setup Gradle (cache)
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Gradle warmup (retry up to 3x)
+        working-directory: app/android
+        run: |
+          for i in 1 2 3; do
+            ./gradlew --no-daemon help && break || sleep 20
+          done
+
       - name: Flutter pub get
         working-directory: app
         run: flutter pub get
 
-      - name: Build APK (release)
+      - name: Build APK (release) with retry
         working-directory: app
-        run: flutter build apk --release
+        run: |
+          for i in 1 2 3; do
+            flutter build apk --release && break || sleep 20
+          done
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
