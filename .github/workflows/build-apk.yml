@@ -258,7 +258,7 @@ jobs:
               String? lastErr;
               for(int attempt=1; attempt<=3; attempt++){
                 try{
-                  final res = await http.post(Uri.parse(aiUrl), headers:{'Content-Type':'application/json'}, body: jsonEncode(payload)).timeout(const Duration(seconds:15));
+                  final res = await http.post(Uri.parse(aiUrl), headers:{'Content-Type':'application/json'}, body: jsonEncode(payload)).timeout(const Duration(seconds:45));
                   if(!mounted) return;
                   if(res.statusCode==200){ Navigator.of(context).pop(); final data=jsonDecode(res.body); _showAnalysisResult(data); return; }
                   else{
