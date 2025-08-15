@@ -329,13 +329,7 @@ jobs:
               ],onChanged:onChanged),
             ]);
 
-           Widget _chip(String label, int count, Color c) => Chip(
-  label: Text('$label: $count'),
-  backgroundColor: c.withOpacity(0.2),
-  shape: StadiumBorder(
-    side: BorderSide(color: c.withOpacity(0.6)),
-  ),
-);
+           Widget _chip(String label, int count, Color c) => Chip(label: Text('$label: $count'), backgroundColor: c.withOpacity(0.2),shape: StadiumBorder(side: BorderSide(color: c.withOpacity(0.6)),),);
           }
 
           class ListToCsvConverter{ const ListToCsvConverter(); String convert(List<List<String>> rows){ final b=StringBuffer(); for(final r in rows){ b.writeln(r.map(_e).join(',')); } return b.toString(); }
