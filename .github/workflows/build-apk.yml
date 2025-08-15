@@ -1,4 +1,4 @@
-name: Build Android APK (AI-enabled, RTL & Justify)
+name: Build Android APK (stable Excel + optional AI)
 
 on:
   push:
@@ -25,20 +25,18 @@ jobs:
           flutter-version: '3.22.2'
           channel: 'stable'
 
-      # --- Create minimal Flutter app in ./app ---
       - name: Create Flutter app
         run: |
           flutter --version
           flutter create app --platforms=android --project-name ctr_color_app --org io.ctrcolor
 
-      # --- pubspec with required packages ---
       - name: Write pubspec.yaml
         run: |
           cat > app/pubspec.yaml << 'YAML'
           name: ctr_color_app
-          description: CTR colorizer + online AI analysis (fa)
+          description: CTR colorizer (stable) + optional online AI (fa)
           publish_to: "none"
-          version: 1.2.3+6
+          version: 1.2.5+8
 
           environment:
             sdk: ">=3.3.0 <4.0.0"
@@ -61,15 +59,14 @@ jobs:
             uses-material-design: true
           YAML
 
-      # --- App source (با fallback به دامنه ctr-ai-proxy-iwqf) ---
-      - name: Write app source
+      - name: Write app source (stable main.dart)
         run: |
           mkdir -p app/lib
           cat > app/lib/main.dart << 'DART'
           import 'dart:convert';
           import 'dart:typed_data';
           import 'package:collection/collection.dart';
-          import 'package:excel/excel.dart' as xls;
+          import 'package:excel/excel.dart' as xls;         // alias to avoid Border clash
           import 'package:file_picker/file_picker.dart';
           import 'package:flutter/material.dart';
           import 'package:share_plus/share_plus.dart';
@@ -78,82 +75,77 @@ jobs:
 
           void main() => runApp(const CTRColorApp());
 
-          // --- URL injection + fallback ---
-          const String _kInjectedProxy = '__AI_PROXY_URL__'; // با sed جایگزین می‌شود
+          // === AI endpoint handling (fallback-safe) ===
+          const String _kInjectedProxy = '__AI_PROXY_URL__';
           const String _kFallbackProxy = 'https://ctr-ai-proxy-iwqf.vercel.app/api/analyze';
           String get kAiProxyUrl => _kInjectedProxy.startsWith('http') ? _kInjectedProxy : _kFallbackProxy;
 
+          // -------------------- Models --------------------
           class PageRow { final String text; final String ctrRaw; final String posRaw; final int rowIndex;
             PageRow({required this.text, required this.ctrRaw, required this.posRaw, required this.rowIndex}); }
           class Benchmark { final double fromPos,toPos,minCTR,maxCTR; Benchmark(this.fromPos,this.toPos,this.minCTR,this.maxCTR); }
           enum ColorClass { red, gray, green, warn }
           class ResultRow { final PageRow row; final ColorClass colorClass; final Benchmark? bm; ResultRow(this.row,this.colorClass,this.bm); }
-          class AnalysisItem { final String title; final String body; AnalysisItem(this.title,this.body); }
 
-          String _clean(String s)=>s.replaceAll(RegExp(r'\\*\\*(.*?)\\*\\*'),r'$1').trim();
-          String _fixBidi(String s){
-            final re=RegExp(r'(https?://\\S+|[A-Za-z0-9][A-Za-z0-9/_\\.\\-]+)');
-            return s.replaceAllMapped(re,(m)=>'\\u2068${m[0]}\\u2069');
-          }
-          List<AnalysisItem> _parseAnalysis(String raw){
-            final text=_clean(raw);
-            final lines=text.split('\\n').map((e)=>e.trim()).toList();
-            final items=<AnalysisItem>[];
-            String? cur; final buf=StringBuffer();
-            void push(){ if(cur!=null){ items.add(AnalysisItem(_fixBidi(cur!),_fixBidi(buf.toString().trim())));} cur=null; buf.clear(); }
-            for(final ln in lines){
-              if(RegExp(r'^(\\d+)[\\.\\)\\-]\\s+').hasMatch(ln)){ push(); cur=ln.replaceFirst(RegExp(r'^(\\d+)[\\.\\)\\-]\\s+'),'');}
-              else if(ln.isEmpty){ buf.writeln(); } else { buf.writeln(ln); }
-            }
-            push();
-            if(items.isEmpty){ items.add(AnalysisItem('جمع‌بندی',_fixBidi(text))); }
-            return items;
-          }
-
-          class CTRColorApp extends StatelessWidget{
+          // -------------------- App --------------------
+          class CTRColorApp extends StatelessWidget {
             const CTRColorApp({super.key});
-            @override Widget build(BuildContext context){
+            @override
+            Widget build(BuildContext context) {
               return MaterialApp(
-                title:'CTR Color App',
-                theme:ThemeData(colorScheme:ColorScheme.fromSeed(seedColor:Colors.teal),useMaterial3:true),
-                home:const HomeScreen(),
-                locale:const Locale('fa'),
+                title: 'CTR Color App',
+                theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal), useMaterial3: true),
+                home: const HomeScreen(),
+                locale: const Locale('fa'),
               );
             }
           }
 
-          class HomeScreen extends StatefulWidget{ const HomeScreen({super.key}); @override State<HomeScreen> createState()=>_HomeScreenState(); }
+          class HomeScreen extends StatefulWidget { const HomeScreen({super.key}); @override State<HomeScreen> createState()=>_HomeScreenState(); }
           class _HomeScreenState extends State<HomeScreen>{
+            // Excel state
             xls.Excel? _excel; String? _dataSheetName; List<String> _headers=[]; List<List<String>> _table=[];
             int? _colText,_colCTR,_colPos; List<Benchmark> _benchmarks=[]; bool _bmFromSheet=false; List<ResultRow> _results=[];
             String? _bmSheetName;
 
+            // AI state
             String? _customAiUrl; static const _kPrefsAiUrl='custom_ai_url';
             String? _lastAiSummaryText;
 
             @override void initState(){ super.initState(); _loadPrefs(); }
-            Future<void> _loadPrefs() async{ final sp=await SharedPreferences.getInstance(); setState(()=>_customAiUrl=sp.getString(_kPrefsAiUrl)); }
-            Future<void> _saveAiUrl(String? v) async{
-              final sp=await SharedPreferences.getInstance();
-              if(v==null||v.trim().isEmpty){ await sp.remove(_kPrefsAiUrl); setState(()=>_customAiUrl=null);}
-              else{ await sp.setString(_kPrefsAiUrl,v.trim()); setState(()=>_customAiUrl=v.trim());}
+
+            Future<void> _loadPrefs() async {
+              final sp = await SharedPreferences.getInstance();
+              setState(()=>_customAiUrl = sp.getString(_kPrefsAiUrl));
             }
 
-            String _normDigits(String s){ const m={'۰':'0','۱':'1','۲':'2','۳':'3','۴':'4','۵':'5','۶':'6','۷':'7','۸':'8','۹':'9','٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9'}; var o=s; m.forEach((k,v)=>o=o.replaceAll(k,v)); return o;}
-            double _num(String v){ try{ var s=_normDigits(v.trim()).replaceAll(',','').replaceAll('٬','').replaceAll('،','').replaceAll('٫','.'); return double.parse(s);}catch(_){return double.nan;}}
-            double _ctr(String v){ var s=_normDigits(v).trim(); var hasPct=s.contains('%')||s.contains('٪'); s=s.replaceAll('%','').replaceAll('٪',''); var x=_num(s); if(x.isNaN)return double.nan; if(hasPct)return x/100; if(x>1)return x/100; return x; }
+            // -------- util: parsing numbers/ctr --------
+            String _normDigits(String s){ const m={'۰':'0','۱':'1','۲':'2','۳':'3','۴':'4','۵':'5','۶':'6','۷':'7','۸':'8','۹':'9','٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9'}; var o=s; m.forEach((k,v)=>o=o.replaceAll(k,v)); return o; }
+            double _num(String v){ try{ var s=_normDigits(v.trim()).replaceAll(',','').replaceAll('٬','').replaceAll('،','').replaceAll('٫','.'); return double.parse(s);}catch(_){return double.nan;} }
+            double _ctr(String v){ var s=_normDigits(v).trim(); var hasPct=s.contains('%')||s.contains('٪'); s=s.replaceAll('%','').replaceAll('٪',''); var x=_num(s); if(x.isNaN) return double.nan; if(hasPct) return x/100; if(x>1) return x/100; return x; }
 
+            // -------- Excel load (stable) --------
             Future<void> _pickExcel() async{
-              setState(()=>{_excel=null,_headers=[],_table=[],_colText=null,_colCTR=null,_colPos=null,_benchmarks=[],_bmFromSheet=false,_results=[],_bmSheetName=null});
-              final res=await FilePicker.platform.pickFiles(type:FileType.custom,allowedExtensions:['xlsx'],withData:true);
-              if(res==null||res.files.isEmpty)return;
-              final bytes=res.files.single.bytes; if(bytes==null){_snack('Failed to read file bytes');return;}
-              final excel=xls.Excel.decodeBytes(bytes);
-              setState(()=>_excel=excel);
-              final names=excel.tables.keys.toList();
-              final chosen=names.firstWhere((t)=>(excel.tables[t]?.maxRows??0)>0,orElse:()=>names.isNotEmpty?names.first:'');
-              if(chosen.isEmpty){_snack('No sheets found');return;}
-              _dataSheetName=chosen; _loadTable(); _loadBenchmarks(excel); _autoMap();
+              try{
+                setState(()=>{_excel=null,_headers=[],_table=[],_colText=null,_colCTR=null,_colPos=null,_benchmarks=[],_bmFromSheet=false,_results=[],_bmSheetName=null});
+                final res=await FilePicker.platform.pickFiles(type:FileType.custom,allowedExtensions:['xlsx'],withData:true);
+                if(res==null||res.files.isEmpty) return;
+                final bytes=res.files.single.bytes;
+                if(bytes==null){ _snack('Failed to read file bytes'); return; }
+                final excel = xls.Excel.decodeBytes(bytes);
+                setState(()=>_excel=excel);
+
+                final names=excel.tables.keys.toList();
+                final chosen=names.firstWhere((t)=>(excel.tables[t]?.maxRows??0)>0,orElse:()=>names.isNotEmpty?names.first:'');
+                if(chosen.isEmpty){ _snack('No sheets found'); return; }
+                _dataSheetName = chosen;
+
+                _loadTable();          // rows + headers
+                _loadBenchmarks(excel); // optional BM
+                _autoMap();            // guess columns
+              } catch(e){
+                _snack('Excel load error: $e');
+              }
             }
 
             void _loadTable(){
@@ -162,9 +154,10 @@ jobs:
               for(var r=0;r<sh.maxRows;r++){
                 final row=<String>[];
                 for(var c=0;c<sh.maxCols;c++){
-                  row.add('${sh.cell(xls.CellIndex.indexByColumnRow(columnIndex:c,rowIndex:r)).value??''}'.trim());
+                  final cell = sh.cell(xls.CellIndex.indexByColumnRow(columnIndex:c,rowIndex:r)).value;
+                  row.add('${cell??''}'.trim());
                 }
-                if(r==0)_headers=row; else _table.add(row);
+                if(r==0) _headers=row; else _table.add(row);
               }
             }
 
@@ -186,38 +179,49 @@ jobs:
             }
 
             void _autoMap(){
-              int? find(List<String> keys){ for(var i=0;i<_headers.length;i++){ final h=_headers[i].toLowerCase(); for(final k in keys){ if(h.contains(k)) return i; } } return null;}
-              _colText=find(['url','address','page','landing','slug','title'])??0;
-              _colCTR=find(['ctr','click-through','clickthrough'])??(_headers.length>1?1:null);
-              _colPos=find(['position','avg position','rank'])??(_headers.length>2?2:null);
+              int? find(List<String> keys){ for(var i=0;i<_headers.length;i++){ final h=_headers[i].toLowerCase(); for(final k in keys){ if(h.contains(k)) return i; } } return null; }
+              _colText = find(['url','address','page','landing','slug','title']) ?? 0;
+              _colCTR  = find(['ctr','click-through','clickthrough']) ?? (_headers.length>1?1:null);
+              _colPos  = find(['position','avg position','rank']) ?? (_headers.length>2?2:null);
               setState((){});
             }
 
-            List<String> _validateData(){
-              final issues=<String>[];
-              if(_headers.isEmpty) issues.add('No data sheet loaded.');
-              if(_colText==null||_colCTR==null||_colPos==null){ issues.add('Please map all three columns (Text/CTR/Position).'); return issues; }
-              var badCtr=0,badPos=0;
-              for(var i=0;i<_table.length;i++){
-                final row=_table[i];
-                final t=_colText!<row.length?row[_colText!]:''; final c=_colCTR!<row.length?row[_colCTR!]:''; final p=_colPos!<row.length?row[_colPos!]:''; 
-                final ctr=_ctr(c), pos=_num(p);
-                if(t.trim().isEmpty) issues.add('Row ${i+2}: empty Text/URL');
-                if(ctr.isNaN) badCtr++; if(pos.isNaN) badPos++;
+            // -------- Validation + compute --------
+            List<String> _validateData() {
+              final issues = <String>[];
+              if (_headers.isEmpty) issues.add('No data sheet loaded.');
+
+              if (_colText == null || _colCTR == null || _colPos == null) {
+                issues.add('Please map all three columns (Text/CTR/Position).'); 
+                return issues;
               }
-              if(badCtr>0) issues.add('Invalid CTR in $badCtr row(s). Use 0.12 or 12% format.');
-              if(badPos>0) issues.add('Invalid Position in $badPos row(s).');
-              if(_benchmarks.isEmpty) issues.add('Benchmarks are missing. Add a "Benchmarks" sheet.');
+
+              var badCtr = 0, badPos = 0;
+              for (var i = 0; i < _table.length; i++) {
+                final row = _table[i];
+                final t = _colText! < row.length ? row[_colText!] : '';
+                final c = _colCTR!  < row.length ? row[_colCTR!]  : '';
+                final p = _colPos!  < row.length ? row[_colPos!]  : '';
+                final ctr = _ctr(c), pos = _num(p);
+                if (t.trim().isEmpty) issues.add('Row ${i+2}: empty Text/URL');
+                if (ctr.isNaN) badCtr++; if (pos.isNaN) badPos++;
+              }
+              if (badCtr > 0) issues.add('Invalid CTR in $badCtr row(s). Use 0.12 or 12% format.');
+              if (badPos > 0) issues.add('Invalid Position in $badPos row(s).');
+              if (_benchmarks.isEmpty) issues.add('Benchmarks are missing. Add a "Benchmarks" sheet.');
               return issues;
             }
-            void _showIssues(List<String> issues){ showDialog(context:context,builder:(_){ return Directionality(textDirection:TextDirection.rtl, child: AlertDialog(
-              title:const Text('ایرادهای داده'),
-              content:SizedBox(width:480,child:SingleChildScrollView(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:issues.map((e)=>Text('• $e')).toList(),))),
-              actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text('باشه'))],
+
+            void _showIssues(List<String> issues){ showDialog(context: context, builder: (_){ return Directionality(textDirection: TextDirection.rtl, child: AlertDialog(
+              title: const Text('ایرادهای داده'),
+              content: SizedBox(width:480,child: SingleChildScrollView(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: issues.map((e)=>Text('• $e')).toList(),))),
+              actions:[TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('باشه'))],
             ));}); }
 
             void _compute(){
-              final issues=_validateData(); if(issues.isNotEmpty){ _showIssues(issues); return; }
+              final issues = _validateData();
+              if (issues.isNotEmpty){ _showIssues(issues); return; }
+
               final out=<ResultRow>[];
               for(var i=0;i<_table.length;i++){
                 final row=_table[i]; if(_colText!>=row.length||_colCTR!>=row.length||_colPos!>=row.length) continue;
@@ -226,180 +230,188 @@ jobs:
                 if(c.isNaN||p.isNaN){ out.add(ResultRow(PageRow(text:text,ctrRaw:cRaw,posRaw:pRaw,rowIndex:i+1),ColorClass.warn,null)); continue; }
                 final bm=_benchmarks.firstWhereOrNull((b)=>p>=b.fromPos&&p<=b.toPos);
                 if(bm==null){ out.add(ResultRow(PageRow(text:text,ctrRaw:cRaw,posRaw:pRaw,rowIndex:i+1),ColorClass.warn,null)); continue; }
-                final cls=c<bm.minCTR?ColorClass.red:(c<=bm.maxCTR?ColorClass.gray:ColorClass.green);
+                final cls = c<bm.minCTR ? ColorClass.red : (c<=bm.maxCTR ? ColorClass.gray : ColorClass.green);
                 out.add(ResultRow(PageRow(text:text,ctrRaw:cRaw,posRaw:pRaw,rowIndex:i+1),cls,bm));
               }
               setState(()=>_results=out);
             }
 
-            Future<void> _analyzeOnline() async{
-              if(_results.isEmpty){ _snack('Please compute colors first.'); return; }
-              if(_benchmarks.isEmpty){ _snack('Benchmarks are required.'); return; }
+            // -------- Optional AI (unchanged behavior) --------
+            Future<void> _analyzeOnline() async {
+              if (_results.isEmpty) { _snack('Please compute colors first.'); return; }
+              if (_benchmarks.isEmpty) { _snack('Benchmarks are required.'); return; }
 
-              final String aiUrl=(_customAiUrl?.isNotEmpty==true)?_customAiUrl!:kAiProxyUrl;
-              if(!aiUrl.startsWith('http')){ _snack('AI endpoint is not configured.'); return; }
+              final String aiUrl = (_customAiUrl?.isNotEmpty==true) ? _customAiUrl! : kAiProxyUrl;
+              if (!aiUrl.startsWith('http')) { _snack('AI endpoint is not configured.'); return; }
 
-              final payload=_buildAnalysisPayload();
+              final payload = _buildAnalysisPayload();
               showDialog(context: context, barrierDismissible: false, builder: (_)=>const Center(child:CircularProgressIndicator()));
 
               String? lastErr;
-              for(int attempt=1; attempt<=2; attempt++){
-                try{
-                  final res=await http.post(Uri.parse(aiUrl),
-                    headers:{'Content-Type':'application/json'},
-                    body:jsonEncode(payload)).timeout(const Duration(seconds:60));
-
-                  if(res.statusCode==200){
-                    final raw=jsonDecode(res.body);
-                    final data = (raw is Map) ? Map<String,dynamic>.from(raw as Map) : <String,dynamic>{};
-                    Navigator.of(context).pop();
-                    if(data.containsKey('summaryText')){ _showAnalysisResult(data); return; }
-                    lastErr='Bad response format from AI';
-                  }else{
-                    lastErr='AI HTTP ${res.statusCode}: ${res.body}';
-                    if(res.statusCode>=400 && res.statusCode<500) break;
-                  }
-                }catch(e){ lastErr='Network/timeout: $e'; }
-                await Future.delayed(const Duration(milliseconds:400));
-              }
-              if(mounted){ Navigator.of(context).pop(); _snack(lastErr??'AI request failed.'); }
+              try{
+                final res = await http.post(Uri.parse(aiUrl), headers:{'Content-Type':'application/json'}, body: jsonEncode(payload)).timeout(const Duration(seconds:60));
+                if(res.statusCode==200){
+                  final raw = jsonDecode(res.body);
+                  final data = (raw is Map) ? Map<String,dynamic>.from(raw as Map) : <String,dynamic>{};
+                  Navigator.of(context).pop();
+                  if(data.containsKey('summaryText')){ _showAnalysisResult(data); return; }
+                  lastErr='Bad response format from AI';
+                }else{
+                  lastErr='AI HTTP ${res.statusCode}: ${res.body}';
+                }
+              }catch(e){ lastErr='Network/timeout: $e'; }
+              if(mounted){ Navigator.of(context).pop(); _snack(lastErr ?? 'AI request failed.'); }
             }
 
-            Map<String,dynamic> _buildAnalysisPayload(){
-              final posBuckets=<int,List<double>>{};
-              for(final r in _results){
-                final p=_num(r.row.posRaw); final c=_ctr(r.row.ctrRaw);
-                if(p.isNaN||c.isNaN) continue;
-                posBuckets.putIfAbsent(p.toInt(),()=>[]).add(c);
+            Map<String, dynamic> _buildAnalysisPayload() {
+              final posBuckets = <int, List<double>>{};
+              for (final r in _results) {
+                final p = _num(r.row.posRaw); final c = _ctr(r.row.ctrRaw);
+                if (p.isNaN || c.isNaN) continue;
+                posBuckets.putIfAbsent(p.toInt(), () => []).add(c);
               }
-              final byPos=posBuckets.entries.map((e){
-                final vals=e.value; final avg=vals.isEmpty?0.0:(vals.reduce((a,b)=>a+b)/vals.length);
-                return {"pos":e.key,"avg":avg,"n":vals.length};
-              }).toList()..sort((a,b)=>(a["pos"] as int).compareTo(b["pos"] as int));
+              final byPos = posBuckets.entries.map((e) {
+                final vals = e.value; final avg = vals.isEmpty ? 0.0 : (vals.reduce((a,b)=>a+b)/vals.length);
+                return {"pos": e.key, "avg": avg, "n": vals.length};
+              }).toList()..sort((a,b)=> (a["pos"] as int).compareTo(b["pos"] as int));
 
-              List<Map<String,dynamic>> under=[],over=[],border=[];
-              for(final r in _results){
-                final bm=r.bm; if(bm==null) continue;
-                final c=_ctr(r.row.ctrRaw); if(c.isNaN) continue;
-                if(c<bm.minCTR) under.add({"url":r.row.text,"pos":r.row.posRaw,"ctr":c,"min":bm.minCTR});
-                else if(c>bm.maxCTR) over.add({"url":r.row.text,"pos":r.row.posRaw,"ctr":c,"max":bm.maxCTR});
-                else{
+              List<Map<String, dynamic>> under=[], over=[], border=[];
+              for (final r in _results) {
+                final bm = r.bm; if (bm == null) continue;
+                final c = _ctr(r.row.ctrRaw); if (c.isNaN) continue;
+                if (c < bm.minCTR) under.add({"url": r.row.text, "pos": r.row.posRaw, "ctr": c, "min": bm.minCTR});
+                else if (c > bm.maxCTR) over.add({"url": r.row.text, "pos": r.row.posRaw, "ctr": c, "max": bm.maxCTR});
+                else {
                   final d1=(c-bm.minCTR).abs(), d2=(bm.maxCTR-c).abs();
-                  if(d1<0.005||d2<0.005) border.add({"url":r.row.text,"pos":r.row.posRaw,"ctr":c,"min":bm.minCTR,"max":bm.maxCTR});
+                  if (d1 < 0.005 || d2 < 0.005) border.add({"url": r.row.text, "pos": r.row.posRaw, "ctr": c, "min": bm.minCTR, "max": bm.maxCTR});
                 }
               }
-              under=under.take(25).toList(); over=over.take(25).toList(); border=border.take(25).toList();
+              under = under.take(25).toList(); over  = over.take(25).toList(); border= border.take(25).toList();
 
               return {
-                "meta":{"datasetName":_dataSheetName??"dataset","rows":_results.length},
-                "benchmarks":_benchmarks.map((b)=>{"from":b.fromPos,"to":b.toPos,"min":b.minCTR,"max":b.maxCTR}).toList(),
-                "summary":{"byPos":byPos},
-                "outliers":{"underperform":under,"overperform":over,"borderline":border}
+                "meta": {"datasetName": _dataSheetName ?? "dataset", "rows": _results.length},
+                "benchmarks": _benchmarks.map((b)=>{"from":b.fromPos,"to":b.toPos,"min":b.minCTR,"max":b.maxCTR}).toList(),
+                "summary": {"byPos": byPos},
+                "outliers": {"underperform": under, "overperform": over, "borderline": border}
               };
             }
 
-            void _showAnalysisResult(Map<String,dynamic> data){
-              final raw=(data["summaryText"]??"").toString().trim();
-              final parsed=_parseAnalysis(raw);
-              _lastAiSummaryText=raw.isEmpty?null:raw;
-              final chips=['🟩','🟨','🟦','🟧','🟥'];
+            // نمایش تحلیل (ساده و پایدار)
+            void _showAnalysisResult(Map<String, dynamic> data) {
+              final raw = (data["summaryText"] ?? "").toString().trim();
+              _lastAiSummaryText = raw.isEmpty ? null : raw;
               showDialog(context: context, builder: (_){
                 return Directionality(textDirection: TextDirection.rtl, child: AlertDialog(
                   title: const Text('تحلیل هوش مصنوعی'),
-                  content: SizedBox(width:520, child: SingleChildScrollView(child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      for (int i=0;i<parsed.length;i++) ...[
-                        _analysisCard(emoji: chips[i%chips.length], title: parsed[i].title, body: parsed[i].body),
-                        const SizedBox(height:10),
-                      ],
-                    ],
-                  ))),
+                  content: SingleChildScrollView(child: SelectableText(raw.isEmpty?'—':raw, textAlign: TextAlign.justify)),
                   actions:[TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('بستن'))],
-                  insetPadding: const EdgeInsets.symmetric(horizontal:16, vertical:24),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                 ));
               });
             }
 
-            Widget _analysisCard({required String emoji, required String title, required String body}) {
-              return Container(
-                decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(14), border: Border.all(color: Colors.grey.shade300)),
-                padding: const EdgeInsets.fromLTRB(12,10,12,12),
-                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(emoji, style: const TextStyle(fontSize: 20)),
-                  const SizedBox(width:8),
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(title.isEmpty?'—':title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-                    const SizedBox(height:6),
-                    SelectableText(body.isEmpty?'—':body, textAlign: TextAlign.justify, style: const TextStyle(height: 1.6)),
-                  ])),
-                ]),
-              );
-            }
-
+            // -------- export --------
             Future<void> _exportCSV() async{
               if(_results.isEmpty){ _snack('No results to export.'); return; }
               final lines=<List<String>>[]..add(['Text','CTR','Position','Class']);
               for(final r in _results){
-                final cls={ColorClass.red:'RED',ColorClass.gray:'GRAY',ColorClass.green:'GREEN',ColorClass.warn:'WARN'}[r.colorClass]!;
-                lines.add([r.row.text,r.row.ctrRaw,r.row.posRaw,cls]);
+                final cls = {ColorClass.red:'RED', ColorClass.gray:'GRAY', ColorClass.green:'GREEN', ColorClass.warn:'WARN'}[r.colorClass]!;
+                lines.add([r.row.text, r.row.ctrRaw, r.row.posRaw, cls]);
               }
-              final csv=const ListToCsvConverter().convert(lines);
-              final data=utf8.encode(csv);
-              await Share.shareXFiles([XFile.fromData(Uint8List.fromList(data),name:'ctr_color_results.csv',mimeType:'text/csv')],text:'CTR color results');
+              final csv = const ListToCsvConverter().convert(lines);
+              final data = utf8.encode(csv);
+              await Share.shareXFiles([XFile.fromData(Uint8List.fromList(data), name:'ctr_color_results.csv', mimeType:'text/csv')], text:'CTR color results');
             }
 
-            Future<void> _exportAnalysis() async{
-              final text=_lastAiSummaryText;
-              if(text==null||text.trim().isEmpty){ _snack('No AI analysis to export.'); return; }
-              final bytes=Uint8List.fromList(utf8.encode(text));
-              await Share.shareXFiles([XFile.fromData(bytes,name:'ctr_ai_analysis.txt',mimeType:'text/plain')],text:'AI analysis');
+            Future<void> _exportAnalysis() async {
+              final text = _lastAiSummaryText;
+              if(text==null || text.trim().isEmpty){ _snack('No AI analysis to export.'); return; }
+              final bytes = Uint8List.fromList(utf8.encode(text));
+              await Share.shareXFiles([XFile.fromData(bytes, name:'ctr_ai_analysis.txt', mimeType:'text/plain')], text:'AI analysis');
             }
 
+            // -------- UI --------
             void _openSettings(){
-              final ctrl=TextEditingController(text:_customAiUrl??'');
-              showDialog(context:context,builder:(_){
-                return Directionality(textDirection:TextDirection.rtl, child: AlertDialog(
-                  title:const Text('تنظیمات'),
-                  content:SizedBox(width:480,child:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,children:[
-                    const Text('آدرس سرویس هوش مصنوعی (خالی = استفاده از آدرس پیش‌فرض برنامه):'),
+              final ctrl = TextEditingController(text: _customAiUrl ?? '');
+              showDialog(context: context, builder: (_){
+                return Directionality(textDirection: TextDirection.rtl, child: AlertDialog(
+                  title: const Text('تنظیمات AI'),
+                  content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Text('آدرس سرویس هوش مصنوعی (خالی = آدرس پیش‌فرض):'),
                     const SizedBox(height:8),
-                    TextField(controller:ctrl,decoration:const InputDecoration(border:OutlineInputBorder(),hintText:'https://your-proxy.vercel.app/api/analyze')),
-                    const SizedBox(height:8),
-                    Text('Current: ${(_customAiUrl?.isNotEmpty==true)?_customAiUrl:kAiProxyUrl}',style:const TextStyle(fontSize:12)),
-                  ])),
-                  actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text('انصراف')),
-                    TextButton(onPressed:(){ _saveAiUrl(ctrl.text); Navigator.pop(context); },child:const Text('ذخیره'))],
+                    TextField(controller: ctrl, decoration: const InputDecoration(border: OutlineInputBorder(), hintText:'https://your-proxy.vercel.app/api/analyze')),
+                    const SizedBox(height:6),
+                    Text('Current: ${( _customAiUrl?.isNotEmpty==true)?_customAiUrl:kAiProxyUrl}', style: const TextStyle(fontSize: 12)),
+                  ]),
+                  actions: [TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('انصراف')),
+                    TextButton(onPressed: () async { 
+                      final sp=await SharedPreferences.getInstance();
+                      final v=ctrl.text.trim();
+                      if(v.isEmpty){ await sp.remove(_kPrefsAiUrl); setState(()=>_customAiUrl=null); }
+                      else { await sp.setString(_kPrefsAiUrl, v); setState(()=>_customAiUrl=v); }
+                      Navigator.pop(context);
+                    }, child: const Text('ذخیره'))],
                 ));
               });
             }
 
-            void _snack(String m)=>ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(m)));
+            void _snack(String m)=>ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
             @override Widget build(BuildContext context){
               final red=_results.where((r)=>r.colorClass==ColorClass.red).length;
               final gray=_results.where((r)=>r.colorClass==ColorClass.gray).length;
               final green=_results.where((r)=>r.colorClass==ColorClass.green).length;
               final warn=_results.where((r)=>r.colorClass==ColorClass.warn).length;
+
               return Scaffold(
-                appBar:AppBar(title:const Text('CTR Color App')),
-                body:Padding(
-                  padding:const EdgeInsets.all(12),
-                  child:ListView(children:[
-                    Row(children:[
+                appBar: AppBar(title: const Text('CTR Color App')),
+                body: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: ListView(children:[
+                    Row(children: [
                       ElevatedButton.icon(onPressed:_pickExcel,icon:const Icon(Icons.upload_file),label:const Text('Import Excel (.xlsx)')),
                       const SizedBox(width:12),
                       ElevatedButton.icon(onPressed:_compute,icon:const Icon(Icons.color_lens),label:const Text('Compute Colors')),
                     ]),
                     const SizedBox(height:8),
-                    Wrap(spacing:12,runSpacing:8,children:[
+                    Wrap(spacing:12, runSpacing:8, children: [
                       OutlinedButton.icon(onPressed:_exportCSV,icon:const Icon(Icons.ios_share),label:const Text('Export CSV')),
                       ElevatedButton.icon(onPressed:_analyzeOnline,icon:const Icon(Icons.analytics),label:const Text('Analyze with AI')),
                       OutlinedButton.icon(onPressed:_openSettings,icon:const Icon(Icons.settings),label:const Text('Settings')),
                       OutlinedButton.icon(onPressed:_exportAnalysis,icon:const Icon(Icons.description),label:const Text('Export Analysis')),
                     ]),
-                    // ... (بقیه همون لیست و جدول‌ها)
+                    const SizedBox(height:12),
+                    if(_headers.isNotEmpty) Text('Data sheet: ${_dataSheetName ?? "-"}'),
+                    if(_headers.isNotEmpty) const SizedBox(height:8),
+                    if(_headers.isNotEmpty) Wrap(spacing:12,runSpacing:12,children:[
+                      _picker('Text column', _colText, (v)=>setState(()=>_colText=v)),
+                      _picker('CTR column',  _colCTR,  (v)=>setState(()=>_colCTR=v)),
+                      _picker('Position column', _colPos, (v)=>setState(()=>_colPos=v)),
+                    ]),
+                    const SizedBox(height:16),
+                    if(_benchmarks.isNotEmpty) Card(child:Padding(padding:const EdgeInsets.all(12),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                      Text('Benchmarks ${_bmFromSheet ? "(from sheet)" : ""} ${_bmSheetName??""}',style:Theme.of(context).textTheme.titleMedium),
+                      const SizedBox(height:8),
+                      SingleChildScrollView(scrollDirection:Axis.horizontal,child:DataTable(columns:const[
+                        DataColumn(label:Text('FromPos')),DataColumn(label:Text('ToPos')),DataColumn(label:Text('MinCTR')),DataColumn(label:Text('MaxCTR')),
+                      ],rows:_benchmarks.map((b)=>DataRow(cells:[
+                        DataCell(Text(b.fromPos.toString())),DataCell(Text(b.toPos.toString())),
+                        DataCell(Text((b.minCTR*100).toStringAsFixed(2)+'%')),DataCell(Text((b.maxCTR*100).toStringAsFixed(2)+'%')),
+                      ])).toList()))
+                    ]))),
+
+                    const SizedBox(height:12),
+                    if(_results.isNotEmpty) Row(children:[
+                      _chip('Red',red,Colors.red), const SizedBox(width:8),
+                      _chip('Gray',gray,Colors.grey), const SizedBox(width:8),
+                      _chip('Green',green,const Color(0xFF00B050)), const SizedBox(width:8),
+                      _chip('Warn',warn,const Color(0xFFFFEBA0)),
+                    ]),
+                    const SizedBox(height:8),
+                    if(_results.isNotEmpty) ListView.builder(shrinkWrap:true,physics:const NeverScrollableScrollPhysics(),itemCount:_results.length,itemBuilder:(ctx,i){
+                      final r=_results[i];
+                      final bg = switch(r.colorClass){ ColorClass.red=>Colors.red.shade100, ColorClass.gray=>Colors.grey.shade300, ColorClass.green=>const Color(0xFFB7E4C7), ColorClass.warn=>const Color(0xFFFFEBA0) };
+                      return Card(color:bg,child:ListTile(dense:true,title:Text(r.row.text,maxLines:2,overflow:TextOverflow.ellipsis),subtitle:Text('CTR: ${r.row.ctrRaw}   |   Position: ${r.row.posRaw}')));
+                    }),
                   ]),
                 ),
               );
@@ -413,30 +425,17 @@ jobs:
             ]);
 
             Widget _chip(String label,int count,Color c)=>Chip(
-              label:Text('$label: $count'),
-              backgroundColor:c.withOpacity(0.2),
-              shape:const StadiumBorder(side:BorderSide(color:Colors.black12)),
+              label: Text('$label: $count'),
+              backgroundColor: c.withOpacity(0.2),
+              shape: const StadiumBorder(side: BorderSide(color: Colors.black12)),
             );
           }
 
-          class ListToCsvConverter{
-            const ListToCsvConverter();
-            String convert(List<List<String>> rows){
-              final b=StringBuffer();
-              for(final r in rows){ b.writeln(r.map(_e).join(',')); }
-              return b.toString();
-            }
-            String _e(String s){
-              final n=s.contains(',')||s.contains('"')||s.contains('\\n')||s.contains('\\r');
-              if(!n) return s;
-              final esc=s.replaceAll('"','""');
-              return '"$esc"';
-            }
-          }
+          class ListToCsvConverter{ const ListToCsvConverter(); String convert(List<List<String>> rows){ final b=StringBuffer(); for(final r in rows){ b.writeln(r.map(_e).join(',')); } return b.toString(); }
+            String _e(String s){ final n=s.contains(',')||s.contains('"')||s.contains('\\n')||s.contains('\\r'); if(!n) return s; final esc=s.replaceAll('"','""'); return '"$esc"'; } }
           DART
 
-      # --- Inject AI URL from secret (اختیاری) ---
-      # اگر Secret خالی/نباشد، اپ از Fallback استفاده می‌کند.
+      # --- Inject AI URL from secret (optional) ---
       - name: Inject AI URL safely
         env:
           AI_PROXY_URL: ${{ secrets.AI_PROXY_URL }}
