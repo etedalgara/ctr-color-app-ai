@@ -38,7 +38,7 @@ jobs:
           name: ctr_color_app
           description: CTR colorizer + online AI analysis (fa)
           publish_to: "none"
-          version: 1.2.0+3
+          version: 1.2.1+4
 
           environment:
             sdk: ">=3.3.0 <4.0.0"
@@ -61,7 +61,7 @@ jobs:
             uses-material-design: true
           YAML
 
-      # --- App source: main.dart (RTL, Justify, excel alias to avoid Border conflict) ---
+      # --- App source: main.dart (RTL, Justify, excel alias, safe AI flow) ---
       - name: Write app source
         run: |
           mkdir -p app/lib
@@ -70,44 +70,51 @@ jobs:
           import 'dart:typed_data';
 
           import 'package:collection/collection.dart';
-          import 'package:excel/excel.dart' as xls;           // <- alias prevents Border conflict
+          import 'package:excel/excel.dart' as xls; // alias prevents Border conflict
           import 'package:file_picker/file_picker.dart';
           import 'package:flutter/material.dart';
           import 'package:share_plus/share_plus.dart';
           import 'package:http/http.dart' as http;
           import 'package:shared_preferences/shared_preferences.dart';
 
-          void main() => runApp(const CTRColorApp());
+          void main() {
+            // prevent silent crashes / black screen
+            FlutterError.onError = (FlutterErrorDetails details) {
+              FlutterError.presentError(details);
+            };
+            runApp(const CTRColorApp());
+          }
 
-          // This will be replaced by the workflow with your secret.
+          // This gets injected by workflow from your repo secret.
           const String kAiProxyUrl = '__AI_PROXY_URL__';
 
           // -------------------- Models & Utils --------------------
-          class PageRow { final String text; final String ctrRaw; final String posRaw; final int rowIndex;
-            PageRow({required this.text, required this.ctrRaw, required this.posRaw, required this.rowIndex}); }
+          class PageRow {
+            final String text; final String ctrRaw; final String posRaw; final int rowIndex;
+            PageRow({required this.text, required this.ctrRaw, required this.posRaw, required this.rowIndex});
+          }
           class Benchmark { final double fromPos,toPos,minCTR,maxCTR; Benchmark(this.fromPos,this.toPos,this.minCTR,this.maxCTR); }
           enum ColorClass { red, gray, green, warn }
           class ResultRow { final PageRow row; final ColorClass colorClass; final Benchmark? bm; ResultRow(this.row,this.colorClass,this.bm); }
 
           class AnalysisItem {
-            final String title;
-            final String body;
+            final String title; final String body;
             AnalysisItem(this.title, this.body);
           }
 
-          String _clean(String s) => s.replaceAll(RegExp(r'\\*\\*(.*?)\\*\\*'), r'$1').trim();
+          String _clean(String s) => s.replaceAll(RegExp(r'\*\*(.*?)\*\*'), r'$1').trim();
           String _fixBidi(String s) {
-            final re = RegExp(r'(https?://\\S+|[A-Za-z0-9][A-Za-z0-9/_\\-.]+)');
-            return s.replaceAllMapped(re, (m) => '\\u2068${m[0]}\\u2069');
+            final re = RegExp(r'(https?://\S+|[A-Za-z0-9][A-Za-z0-9/_\.\-]+)');
+            return s.replaceAllMapped(re, (m) => '\u2068${m[0]}\u2069');
           }
           List<AnalysisItem> _parseAnalysis(String raw) {
             final text = _clean(raw);
-            final lines = text.split('\\n').map((e) => e.trim()).toList();
+            final lines = text.split('\n').map((e) => e.trim()).toList();
             final items = <AnalysisItem>[];
             String? curTitle; final buf = StringBuffer();
             void push(){ if(curTitle!=null){ items.add(AnalysisItem(_fixBidi(curTitle!), _fixBidi(buf.toString().trim())));} curTitle=null; buf.clear(); }
             for(final ln in lines){
-              if(RegExp(r'^(\\d+)[\\.\\)\\-]\\s+').hasMatch(ln)){ push(); curTitle = ln.replaceFirst(RegExp(r'^(\\d+)[\\.\\)\\-]\\s+'),''); }
+              if(RegExp(r'^(\d+)[\.\)\-]\s+').hasMatch(ln)){ push(); curTitle = ln.replaceFirst(RegExp(r'^(\d+)[\.\)\-]\s+'),''); }
               else if(ln.isEmpty){ buf.writeln(); } else { buf.writeln(ln); }
             }
             push();
@@ -246,30 +253,89 @@ jobs:
               setState(()=>_results=out);
             }
 
+            // ---------- SAFE AI ANALYZE ----------
             Future<void> _analyzeOnline() async {
               if (_results.isEmpty) { _snack('Please compute colors first.'); return; }
               if (_benchmarks.isEmpty) { _snack('Benchmarks are required.'); return; }
-              final String aiUrl = (_customAiUrl?.isNotEmpty==true) ? _customAiUrl! : kAiProxyUrl;
+
+              final String aiUrl = (_customAiUrl?.isNotEmpty == true) ? _customAiUrl! : kAiProxyUrl;
               if (!aiUrl.startsWith('http')) { _snack('AI endpoint is not configured.'); return; }
+
               final payload = _buildAnalysisPayload();
 
-              showDialog(context: context, barrierDismissible: false, builder: (_)=>const Center(child:CircularProgressIndicator()));
+              // progress dialog (safe open/close)
+              bool dialogOpen = false;
+              Future<void> _openBusy() async {
+                dialogOpen = true;
+                await showDialog(
+                  context: context,
+                  barrierDismissible: false,
+                  builder: (_) => const Center(child: CircularProgressIndicator()),
+                );
+                dialogOpen = false;
+              }
+              void _closeBusyIfOpen() {
+                if (dialogOpen && Navigator.of(context).canPop()) {
+                  Navigator.of(context).pop();
+                }
+                dialogOpen = false;
+              }
+
+              // open without awaiting (non-block)
+              // ignore: use_build_context_synchronously
+              _openBusy();
+
+              // safety timer: avoid stuck dialog
+              final safety = Future.delayed(const Duration(seconds: 20), () {
+                if (!mounted) return;
+                if (dialogOpen) {
+                  _closeBusyIfOpen();
+                  _snack('AI request took too long. Please try again.');
+                }
+              });
 
               String? lastErr;
-              for(int attempt=1; attempt<=3; attempt++){
-                try{
-                  final res = await http.post(Uri.parse(aiUrl), headers:{'Content-Type':'application/json'}, body: jsonEncode(payload)).timeout(const Duration(seconds:45));
-                  if(!mounted) return;
-                  if(res.statusCode==200){ Navigator.of(context).pop(); final data=jsonDecode(res.body); _showAnalysisResult(data); return; }
-                  else{
-                    final bodyText = res.body.isNotEmpty ? res.body : '';
-                    lastErr = 'AI service error: ${res.statusCode}${bodyText.isNotEmpty ? ' • $bodyText' : ''}';
-                    if(res.statusCode>=400 && res.statusCode<500) break;
+              try {
+                for (int attempt = 1; attempt <= 2; attempt++) {
+                  try {
+                    final res = await http
+                        .post(
+                          Uri.parse(aiUrl),
+                          headers: {'Content-Type': 'application/json'},
+                          body: jsonEncode(payload),
+                        )
+                        .timeout(const Duration(seconds: 60)); // 60s
+
+                    if (!mounted) return;
+
+                    if (res.statusCode == 200) {
+                      final data = jsonDecode(res.body);
+                      if (data is Map && data.containsKey('summaryText')) {
+                        _closeBusyIfOpen();
+                        _showAnalysisResult(data);
+                        return;
+                      } else if (data is Map && data['error'] != null) {
+                        lastErr = 'AI error: ${data['error']}';
+                        break;
+                      } else {
+                        lastErr = 'Bad response format from AI.';
+                      }
+                    } else {
+                      lastErr = 'AI HTTP ${res.statusCode}: ${res.body}';
+                      if (res.statusCode >= 400 && res.statusCode < 500) break;
+                    }
+                  } catch (e) {
+                    lastErr = 'Network/timeout: $e';
                   }
-                }catch(e){ lastErr='Network/timeout error: $e'; }
-                await Future.delayed(Duration(milliseconds: 300*attempt));
+                  await Future.delayed(const Duration(milliseconds: 400));
+                }
+              } finally {
+                _closeBusyIfOpen();
               }
-              if(mounted){ Navigator.of(context).pop(); _snack(lastErr ?? 'AI request failed.'); }
+
+              if (!mounted) return;
+              _snack(lastErr ?? 'AI request failed.');
+              await safety;
             }
 
             Map<String, dynamic> _buildAnalysisPayload() {
@@ -458,8 +524,20 @@ jobs:
             );
           }
 
-          class ListToCsvConverter{ const ListToCsvConverter(); String convert(List<List<String>> rows){ final b=StringBuffer(); for(final r in rows){ b.writeln(r.map(_e).join(',')); } return b.toString(); }
-            String _e(String s){ final n=s.contains(',')||s.contains('"')||s.contains('\\n')||s.contains('\\r'); if(!n) return s; final esc=s.replaceAll('"','""'); return '"$esc"'; } }
+          class ListToCsvConverter{
+            const ListToCsvConverter();
+            String convert(List<List<String>> rows){
+              final b=StringBuffer();
+              for(final r in rows){ b.writeln(r.map(_e).join(',')); }
+              return b.toString();
+            }
+            String _e(String s){
+              final n=s.contains(',')||s.contains('"')||s.contains('\n')||s.contains('\r');
+              if(!n) return s;
+              final esc=s.replaceAll('"','""');
+              return '"$esc"';
+            }
+          }
           DART
 
       # --- Inject AI URL safely from secret (no sed errors) ---
@@ -502,9 +580,11 @@ jobs:
           }
           GRADLE
 
-      # --- Gradle cache + retries to avoid transient network errors (warnings here OK) ---
+      # --- Gradle cache + retries (warnings OK). Read-only to reduce save warnings. ---
       - name: Setup Gradle (cache)
         uses: gradle/actions/setup-gradle@v3
+        with:
+          cache-read-only: true
 
       - name: Gradle warmup (retry up to 3x)
         working-directory: app/android
