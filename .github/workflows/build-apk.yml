@@ -133,11 +133,10 @@ jobs:
             // CTR is just a raw number now.
             double _ctr(String v) => _num(v);
 
-            // nice display: int → no decimals, float → 1 decimal max
-            String _fmt(double x){
-              if (x.isNaN) return '';
-              final isInt = (x % 1) == 0;
-              return isInt ? x.toStringAsFixed(0) : x.toStringAsFixed(1);
+            // nice display: int → no decimals, float → 2 decimal max
+            String _fmt(double x) {if (x.isNaN) return '';
+            final isInt = x.truncateToDouble() == x;
+            return isInt ? x.toStringAsFixed(0) : x.toStringAsFixed(2);
             }
 
             // -------- Excel load --------
