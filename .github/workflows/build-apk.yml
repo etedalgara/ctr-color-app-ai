@@ -1,4 +1,4 @@
-name: Build Android APK (raw CTR + 5 bands w/ tolerance + optional AI)
+name: Build Android APK (raw CTR + 5 bands w/ tolerance + per-page AI)
 
 on:
   push:
@@ -34,9 +34,9 @@ jobs:
         run: |
           cat > app/pubspec.yaml << 'YAML'
           name: ctr_color_app
-          description: CTR colorizer (raw numbers, 5 bands by tolerance) + optional online AI (fa)
+          description: CTR colorizer (raw numbers, 5 bands by tolerance) + per-page & overall AI (fa)
           publish_to: "none"
-          version: 1.4.0+10
+          version: 1.5.0+11
 
           environment:
             sdk: ">=3.3.0 <4.0.0"
@@ -112,7 +112,7 @@ jobs:
 
             // Tolerance (0..0.5) persisted
             static const _kPrefsTol='tolerance';
-            double _tolerance = 0.10; // 10% پیش‌فرض (0..0.5)
+            double _tolerance = 0.10; // 10%
 
             // AI state
             String? _customAiUrl; static const _kPrefsAiUrl='custom_ai_url';
@@ -122,31 +122,21 @@ jobs:
 
             Future<void> _loadPrefs() async {
               final sp = await SharedPreferences.getInstance();
-              setState((){
-                _customAiUrl = sp.getString(_kPrefsAiUrl);
-                _tolerance = sp.getDouble(_kPrefsTol) ?? 0.10;
-              });
+              setState((){ _customAiUrl = sp.getString(_kPrefsAiUrl); _tolerance = sp.getDouble(_kPrefsTol) ?? 0.10; });
             }
 
             // -------- number parsing (RAW; no percent logic) --------
             String _normDigits(String s){ const m={'۰':'0','۱':'1','۲':'2','۳':'3','۴':'4','۵':'5','۶':'6','۷':'7','۸':'8','۹':'9','٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9'}; var o=s; m.forEach((k,v)=>o=o.replaceAll(k,v)); return o; }
             double _num(String v){
               try{
-                var s=_normDigits(v.trim())
-                    .replaceAll('%','').replaceAll('٪','')   // فقط حذف %
-                    .replaceAll(',','').replaceAll('٬','').replaceAll('،','')
-                    .replaceAll('٫','.');
+                var s=_normDigits(v.trim()).replaceAll('%','').replaceAll('٪','').replaceAll(',','').replaceAll('٬','').replaceAll('،','').replaceAll('٫','.');
                 return double.parse(s);
               }catch(_){ return double.nan; }
             }
             double _ctr(String v) => _num(v);
 
             // نمایش: صحیح بدون اعشار، اعشاری تا 2 رقم
-            String _fmt(double x){
-              if (x.isNaN) return '';
-              final isInt = x.truncateToDouble() == x;
-              return isInt ? x.toStringAsFixed(0) : x.toStringAsFixed(2);
-            }
+            String _fmt(double x){ if (x.isNaN) return ''; final isInt = x.truncateToDouble() == x; return isInt ? x.toStringAsFixed(0) : x.toStringAsFixed(2); }
 
             // -------- Excel load --------
             Future<void> _pickExcel() async{
@@ -154,27 +144,20 @@ jobs:
                 setState(()=>{_excel=null,_headers=[],_table=[],_colText=null,_colCTR=null,_colPos=null,_benchmarks=[],_bmFromSheet=false,_results=[],_bmSheetName=null});
                 final res=await FilePicker.platform.pickFiles(type:FileType.custom,allowedExtensions:['xlsx'],withData:true);
                 if(res==null||res.files.isEmpty) return;
-                final bytes=res.files.single.bytes;
-                if(bytes==null){ _snack('Failed to read file bytes'); return; }
-                final excel = xls.Excel.decodeBytes(bytes);
-                setState(()=>_excel=excel);
+                final bytes=res.files.single.bytes; if(bytes==null){ _snack('Failed to read file bytes'); return; }
+                final excel = xls.Excel.decodeBytes(bytes); setState(()=>_excel=excel);
 
                 final names=excel.tables.keys.toList();
                 final chosen=names.firstWhere((t)=>(excel.tables[t]?.maxRows??0)>0,orElse:()=>names.isNotEmpty?names.first:'');
                 if(chosen.isEmpty){ _snack('No sheets found'); return; }
                 _dataSheetName = chosen;
 
-                _loadTable();
-                _loadBenchmarks(excel);
-                _autoMap();
-              } catch(e){
-                _snack('Excel load error: $e');
-              }
+                _loadTable(); _loadBenchmarks(excel); _autoMap();
+              } catch(e){ _snack('Excel load error: $e'); }
             }
 
             void _loadTable(){
-              final sh=_excel!.tables[_dataSheetName]!;
-              _headers=[]; _table=[];
+              final sh=_excel!.tables[_dataSheetName]!; _headers=[]; _table=[];
               for(var r=0;r<sh.maxRows;r++){
                 final row=<String>[];
                 for(var c=0;c<sh.maxCols;c++){
@@ -214,11 +197,7 @@ jobs:
             List<String> _validateData() {
               final issues = <String>[];
               if (_headers.isEmpty) issues.add('No data sheet loaded.');
-
-              if (_colText == null || _colCTR == null || _colPos == null) {
-                issues.add('Please map all three columns (Text/CTR/Position).'); 
-                return issues;
-              }
+              if (_colText == null || _colCTR == null || _colPos == null) { issues.add('Please map all three columns (Text/CTR/Position).'); return issues; }
 
               var badCtr = 0, badPos = 0;
               for (var i = 0; i < _table.length; i++) {
@@ -240,9 +219,7 @@ jobs:
               showDialog(context: context, builder: (_){
                 return Directionality(textDirection: TextDirection.rtl, child: AlertDialog(
                   title: const Text('ایرادهای داده'),
-                  content: SizedBox(width:480,child: SingleChildScrollView(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: issues.map((e)=>Text('• $e')).toList(),)
-                  )),
+                  content: SizedBox(width:480,child: SingleChildScrollView(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: issues.map((e)=>Text('• $e')).toList(),))),
                   actions:[TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('باشه'))],
                 ));
               });
@@ -279,17 +256,24 @@ jobs:
               setState(()=>_results=out);
             }
 
-            // -------- Optional AI --------
-            Future<void> _analyzeOnline() async {
+            // -------- Optional AI: overall or single-page --------
+            Future<void> _analyzeOverall() async {
               if (_results.isEmpty) { _snack('Please compute colors first.'); return; }
               if (_benchmarks.isEmpty) { _snack('Benchmarks are required.'); return; }
+              await _callAI(_buildAnalysisPayload());
+            }
 
+            Future<void> _analyzeSingle(ResultRow r) async {
+              if (_benchmarks.isEmpty) { _snack('Benchmarks are required.'); return; }
+              final payload = _buildSinglePagePayload(r);
+              await _callAI(payload);
+            }
+
+            Future<void> _callAI(Map<String, dynamic> payload) async {
               final String aiUrl = (_customAiUrl?.isNotEmpty==true) ? _customAiUrl! : kAiProxyUrl;
               if (!aiUrl.startsWith('http')) { _snack('AI endpoint is not configured.'); return; }
 
-              final payload = _buildAnalysisPayload();
               showDialog(context: context, barrierDismissible: false, builder: (_)=>const Center(child:CircularProgressIndicator()));
-
               String? lastErr;
               try{
                 final res = await http.post(Uri.parse(aiUrl), headers:{'Content-Type':'application/json'}, body: jsonEncode(payload)).timeout(const Duration(seconds:60));
@@ -319,7 +303,7 @@ jobs:
               }).toList()..sort((a,b)=> (a["pos"] as int).compareTo(b["pos"] as int));
 
               List<Map<String, dynamic>> under=[], over=[], border=[];
-              final eps = (_tolerance * ((_benchmarks.isNotEmpty)? _benchmarks.first.maxCTR : 1)).abs(); // حد مرزی تقریبی
+              final eps = (_tolerance * ((_benchmarks.isNotEmpty)? _benchmarks.first.maxCTR : 1)).abs();
               for (final r in _results) {
                 final bm = r.bm; if (bm == null) continue;
                 final c = _ctr(r.row.ctrRaw); if (c.isNaN) continue;
@@ -333,11 +317,37 @@ jobs:
               under = under.take(25).toList(); over  = over.take(25).toList(); border= border.take(25).toList();
 
               return {
+                "mode": "overall",
                 "meta": {"datasetName": _dataSheetName ?? "dataset", "rows": _results.length},
                 "benchmarks": _benchmarks.map((b)=>{"from":b.fromPos,"to":b.toPos,"min":b.minCTR,"max":b.maxCTR}).toList(),
                 "settings": {"tolerance": _tolerance, "colors": ["redStrong","redLight","gray","greenLight","greenStrong"]},
                 "summary": {"byPos": byPos},
                 "outliers": {"underperform": under, "overperform": over, "borderline": border}
+              };
+            }
+
+            Map<String, dynamic> _buildSinglePagePayload(ResultRow r) {
+              final c = _ctr(r.row.ctrRaw); final p = _num(r.row.posRaw);
+              final bm = r.bm;
+              String band = switch(r.colorClass){
+                ColorClass.redStrong => 'redStrong',
+                ColorClass.redLight => 'redLight',
+                ColorClass.gray => 'gray',
+                ColorClass.greenLight => 'greenLight',
+                ColorClass.greenStrong => 'greenStrong',
+                ColorClass.warn => 'warn',
+              };
+              return {
+                "mode": "single",
+                "meta": {"datasetName": _dataSheetName ?? "dataset"},
+                "settings": {"tolerance": _tolerance},
+                "page": {
+                  "url": r.row.text,
+                  "pos": p,
+                  "ctr": c,
+                  "band": band,
+                  "thresholds": (bm==null)? null : {"min": bm.minCTR, "max": bm.maxCTR}
+                }
               };
             }
 
@@ -391,18 +401,13 @@ jobs:
                     const SizedBox(height:8),
                     TextField(controller: ctrl, decoration: const InputDecoration(border: OutlineInputBorder(), hintText:'https://your-proxy.vercel.app/api/analyze')),
                     const SizedBox(height:12),
-                    Text('تلورانس (۰ تا ۵۰٪) — محدوده‌ی خاکستری بین Min/Max و نوارهای کم/پررنگ با ضریب تلورانس تعیین می‌شود.', style: const TextStyle(fontSize: 12)),
+                    Text('تلورانس (۰ تا ۵۰٪):', style: const TextStyle(fontSize: 12)),
                     StatefulBuilder(builder: (ctx, setS){
-                      return Column(
-                        children: [
-                          Slider(
-                            value: _tolerance, min: 0.0, max: 0.5, divisions: 50,
-                            label: '${(_tolerance*100).toStringAsFixed(0)}%',
-                            onChanged: (v){ setS(()=>_tolerance=v); },
-                          ),
-                          Text('Tolerance: ${(_tolerance*100).toStringAsFixed(0)}%'),
-                        ],
-                      );
+                      return Column(children: [
+                        Slider(value:_tolerance, min:0.0, max:0.5, divisions:50, label:'${(_tolerance*100).toStringAsFixed(0)}%',
+                          onChanged:(v){ setS(()=>_tolerance=v); }),
+                        Text('Tolerance: ${(_tolerance*100).toStringAsFixed(0)}%'),
+                      ]);
                     }),
                   ]),
                   actions: [
@@ -440,11 +445,12 @@ jobs:
                       ElevatedButton.icon(onPressed:_pickExcel,icon:const Icon(Icons.upload_file),label:const Text('Import Excel (.xlsx)')),
                       const SizedBox(width:12),
                       ElevatedButton.icon(onPressed:_compute,icon:const Icon(Icons.color_lens),label:const Text('Compute Colors')),
+                      const SizedBox(width:12),
+                      ElevatedButton.icon(onPressed:_analyzeOverall,icon:const Icon(Icons.analytics),label:const Text('Overall AI')),
                     ]),
                     const SizedBox(height:8),
                     Wrap(spacing:12, runSpacing:8, children: [
                       OutlinedButton.icon(onPressed:_exportCSV,icon:const Icon(Icons.ios_share),label:const Text('Export CSV')),
-                      ElevatedButton.icon(onPressed:_analyzeOnline,icon:const Icon(Icons.analytics),label:const Text('Analyze with AI')),
                       OutlinedButton.icon(onPressed:_openSettings,icon:const Icon(Icons.settings),label:const Text('Settings')),
                       OutlinedButton.icon(onPressed:_exportAnalysis,icon:const Icon(Icons.description),label:const Text('Export Analysis')),
                     ]),
@@ -477,23 +483,30 @@ jobs:
                       _chip('Warn',wn,const Color(0xFFFFE082)),
                     ]),
                     const SizedBox(height:8),
-                    if(_results.isNotEmpty) ListView.builder(shrinkWrap:true,physics:const NeverScrollableScrollPhysics(),itemCount:_results.length,itemBuilder:(ctx,i){
-                      final r=_results[i];
-                      final bg = switch(r.colorClass){
-                        ColorClass.redStrong => Colors.red.shade200,
-                        ColorClass.redLight  => Colors.red.shade100,
-                        ColorClass.gray      => Colors.grey.shade300,
-                        ColorClass.greenLight=> const Color(0xFFB7E4C7),
-                        ColorClass.greenStrong=> const Color(0xFF9BE7C4),
-                        ColorClass.warn      => const Color(0xFFFFEBA0),
-                      };
-                      final c=_ctr(r.row.ctrRaw); final p=_num(r.row.posRaw);
-                      return Card(color:bg,child:ListTile(
-                        dense:true,
-                        title:Text(r.row.text,maxLines:2,overflow:TextOverflow.ellipsis),
-                        subtitle:Text('CTR: ${_fmt(c)}   |   Position: ${_fmt(p)}'),
-                      ));
-                    }),
+                    if(_results.isNotEmpty) ListView.builder(
+                      shrinkWrap:true,physics:const NeverScrollableScrollPhysics(),itemCount:_results.length,
+                      itemBuilder:(ctx,i){
+                        final r=_results[i];
+                        final bg = switch(r.colorClass){
+                          ColorClass.redStrong => Colors.red.shade200,
+                          ColorClass.redLight  => Colors.red.shade100,
+                          ColorClass.gray      => Colors.grey.shade300,
+                          ColorClass.greenLight=> const Color(0xFFB7E4C7),
+                          ColorClass.greenStrong=> const Color(0xFF9BE7C4),
+                          ColorClass.warn      => const Color(0xFFFFEBA0),
+                        };
+                        final c=_ctr(r.row.ctrRaw); final p=_num(r.row.posRaw);
+                        return Card(color:bg,child:ListTile(
+                          dense:true,
+                          title:Text(r.row.text,maxLines:2,overflow:TextOverflow.ellipsis),
+                          subtitle:Text('CTR: ${_fmt(c)}   |   Position: ${_fmt(p)}'),
+                          trailing: IconButton(
+                            tooltip: 'تحلیل این صفحه',
+                            icon: const Icon(Icons.insights),
+                            onPressed: ()=> _analyzeSingle(r),
+                          ),
+                        ));
+                      }),
                     const SizedBox(height:12),
                     Text('Tolerance: ${(_tolerance*100).toStringAsFixed(0)}%'),
                   ]),
