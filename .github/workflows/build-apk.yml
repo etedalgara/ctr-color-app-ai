@@ -36,7 +36,7 @@ jobs:
           name: ctr_color_app
           description: CTR colorizer (raw numbers, 5 bands by tolerance) + per-page AI (fa)
           publish_to: "none"
-          version: 1.5.3+14
+          version: 1.5.4+15
 
           environment:
             sdk: ">=3.3.0 <4.0.0"
@@ -303,7 +303,6 @@ jobs:
 
             void _snack(String m)=>ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
-            // ---------- Colored 7-filter grid (fixed size) ----------
             Color _btnColor(ColorClass? band, bool selected){
               switch(band){
                 case null:                     return selected? Colors.grey.shade500 : Colors.grey.shade400; // All
@@ -318,9 +317,9 @@ jobs:
 
             Widget _filtersGrid(BuildContext context, List<MapEntry<String, ColorClass?>> items){
               final w = MediaQuery.of(context).size.width;
-              const outerPad = 24.0; // page horizontal padding approx (12 + 12)
+              const outerPad = 24.0;
               const gap = 8.0;
-              final cellW = (w - outerPad - gap*3) / 4; // 4 per row visually
+              final cellW = (w - outerPad - gap*3) / 4;
 
               List<Widget> btns = items.map((e){
                 final label = e.key; final band = e.value;
@@ -449,18 +448,30 @@ jobs:
                     _filtersGrid(context, filters),
                     const SizedBox(height:8),
 
-                    // راهنمای شروع: فقط قبل از ایمپورت فایل نمایش بده
-                    if(_excel==null) Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.orange, width: 2),
-                        borderRadius: BorderRadius.circular(8),
+                    // راهنمای شروع (bidi fixed)
+                    if(_excel==null)
+                      Padding(
+                        padding: const EdgeInsets.all(4),
+                        child: Center(
+                          child: Text.rich(
+                            TextSpan(
+                              children: [
+                                const TextSpan(text: 'ابتدا فایل اکسل را وارد و دکمه '),
+                                WidgetSpan(
+                                  alignment: PlaceholderAlignment.baseline,
+                                  baseline: TextBaseline.alphabetic,
+                                  child: Directionality(
+                                    textDirection: TextDirection.ltr,
+                                    child: const Text('Analyze Data'),
+                                  ),
+                                ),
+                                const TextSpan(text: ' را اجرا کنید.'),
+                              ],
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
                       ),
-                      child: const Text(
-                        'ابتدا فایل اکسل را وارد و دکمه \u200EAnalyze Data\u200E را اجرا کنید.',
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
 
                     if(_excel!=null && _results.isEmpty) const Padding(
                       padding: EdgeInsets.only(top:16),
@@ -476,15 +487,14 @@ jobs:
                         final c=_ctr(r.row.ctrRaw), p=_num(r.row.posRaw);
                         return Card(color:bg, child: ListTile(
                           title: Text(r.row.text, softWrap:true),
+                          // ←ـ این بخش تغییر کرد: نمایش کامل، کنار هم و ثابت
                           subtitle: Padding(
                             padding: const EdgeInsets.only(top:6),
                             child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.baseline,
-                              textBaseline: TextBaseline.alphabetic,
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Flexible(child: Text('CTR: ${_fmt(c)}', overflow: TextOverflow.ellipsis)),
-                                const SizedBox(width:16),
-                                Flexible(child: Text('Position: ${_fmt(p)}', overflow: TextOverflow.ellipsis)),
+                                Text('CTR: ${_fmt(c)}', softWrap: false),
+                                Text('Position: ${_fmt(p)}', softWrap: false),
                               ],
                             ),
                           ),
