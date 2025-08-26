@@ -36,7 +36,7 @@ jobs:
           name: ctr_color_app
           description: CTR colorizer (raw numbers, 5 bands by tolerance) + per-page AI (fa)
           publish_to: "none"
-          version: 1.5.4+15
+          version: 1.5.5+16
 
           environment:
             sdk: ">=3.3.0 <4.0.0"
@@ -448,7 +448,6 @@ jobs:
                     _filtersGrid(context, filters),
                     const SizedBox(height:8),
 
-                    // راهنمای شروع (bidi fixed)
                     if(_excel==null)
                       Padding(
                         padding: const EdgeInsets.all(4),
@@ -487,13 +486,16 @@ jobs:
                         final c=_ctr(r.row.ctrRaw), p=_num(r.row.posRaw);
                         return Card(color:bg, child: ListTile(
                           title: Text(r.row.text, softWrap:true),
-                          // ←ـ این بخش تغییر کرد: نمایش کامل، کنار هم و ثابت
+                          // فاصلهٔ واضح بین CTR و Position
                           subtitle: Padding(
                             padding: const EdgeInsets.only(top:6),
                             child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              mainAxisAlignment: MainAxisAlignment.start,
                               children: [
                                 Text('CTR: ${_fmt(c)}', softWrap: false),
+                                const SizedBox(width: 16),
+                                const Text('|'),
+                                const SizedBox(width: 16),
                                 Text('Position: ${_fmt(p)}', softWrap: false),
                               ],
                             ),
