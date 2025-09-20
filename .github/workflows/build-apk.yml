@@ -36,7 +36,7 @@ jobs:
           name: ctr_color_app
           description: CTR/Pos/Impr/Clicks with Opportunity Labels (fa) + per-page AI + Dark Mode
           publish_to: "none"
-          version: 2.1.0+22
+          version: 2.1.1+23
 
           environment:
             sdk: ">=3.3.0 <4.0.0"
@@ -112,7 +112,7 @@ jobs:
             ResultRow(this.row,this.colorClass,this.bm,this.oppLabel);
           }
 
-          // ===================== App with ThemeMode =====================
+          // ===================== App with ThemeMode + Toggle Button =====================
           class CTRColorApp extends StatefulWidget {
             const CTRColorApp({super.key});
             @override State<CTRColorApp> createState()=>_CTRColorAppState();
@@ -135,6 +135,10 @@ jobs:
               final raw = m==ThemeMode.dark?'dark': m==ThemeMode.light?'light':'system';
               await sp.setString(_kPrefsTheme, raw);
               setState(()=>_themeMode=m);
+            }
+            void _toggleTheme(){
+              final next = _themeMode==ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
+              _saveTheme(next);
             }
 
             ThemeData _lightTheme(){
@@ -203,7 +207,11 @@ jobs:
                 theme: _lightTheme(),
                 darkTheme: _darkTheme(),
                 themeMode: _themeMode,
-                home: HomeScreen(onChangeTheme: _saveTheme, currentTheme: _themeMode),
+                home: HomeScreen(
+                  onChangeTheme: _saveTheme,
+                  currentTheme: _themeMode,
+                  onToggleTheme: _toggleTheme,
+                ),
                 locale: const Locale('fa'),
               );
             }
@@ -213,7 +221,8 @@ jobs:
           class HomeScreen extends StatefulWidget {
             final void Function(ThemeMode) onChangeTheme;
             final ThemeMode currentTheme;
-            const HomeScreen({super.key, required this.onChangeTheme, required this.currentTheme});
+            final VoidCallback onToggleTheme;
+            const HomeScreen({super.key, required this.onChangeTheme, required this.currentTheme, required this.onToggleTheme});
             @override State<HomeScreen> createState()=>_HomeScreenState();
           }
 
@@ -436,7 +445,7 @@ jobs:
               }
             }
 
-            // -------- KPI chip
+            // -------- KPI chip (خوانا)
             Widget _kpiChip(BuildContext context, String label, String value) {
               final cs = Theme.of(context).colorScheme;
               final isDark = Theme.of(context).brightness==Brightness.dark;
@@ -450,7 +459,7 @@ jobs:
               );
             }
 
-            // -------- Page card
+            // -------- Page card (path متن خوانا در لایت/دارک)
             Widget _pageCard(ResultRow r){
               final uri = Uri.tryParse(r.row.text);
               final host = uri?.host.isNotEmpty == true ? uri!.host : r.row.text;
@@ -460,6 +469,8 @@ jobs:
               final im = _num(r.row.impRaw);
               final ck = _num(r.row.clkRaw);
               final bg = _bandColor(r.colorClass);
+              final isDark = Theme.of(context).brightness==Brightness.dark;
+              final pathColor = isDark ? Colors.white.withOpacity(0.85) : Colors.black87; // <-- خوانایی
 
               return Container(
                 decoration: BoxDecoration(
@@ -480,7 +491,7 @@ jobs:
                       TextSpan(children: [
                         TextSpan(text: host, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
                         if (path.isNotEmpty) const TextSpan(text: '  '),
-                        if (path.isNotEmpty) TextSpan(text: path, style: TextStyle(color: Colors.white.withOpacity(0.85))),
+                        if (path.isNotEmpty) TextSpan(text: path, style: TextStyle(color: pathColor)),
                       ]),
                       textDirection: TextDirection.ltr,
                     ),
@@ -601,10 +612,10 @@ jobs:
               setState(()=>_results=out);
             }
 
-            // -------- Filter chips with band colors
-            Color _bandChipColor(ColorClass? band){
+            // -------- Filter chips (بدون تغییر اندازه در حالت انتخاب)
+            Color _bandChipBase(ColorClass? band){
               switch(band){
-                case null: return Colors.blueGrey.shade400; // All
+                case null: return Colors.blueGrey.shade400;
                 case ColorClass.redStrong: return Colors.red.shade400;
                 case ColorClass.redLight: return Colors.pink.shade300;
                 case ColorClass.gray: return Colors.grey.shade500;
@@ -613,16 +624,15 @@ jobs:
                 case ColorClass.warn: return Colors.orange.shade500;
               }
             }
-
             Widget _filtersGrid(BuildContext context, List<MapEntry<String, ColorClass?>> items){
               return Wrap(
                 spacing: 8, runSpacing: 8,
                 children: items.map((e){
                   final band = e.value;
                   final selected = band==null ? _filterBands.isEmpty : _filterBands.contains(band);
-                  final baseColor = _bandChipColor(band);
-                  return ChoiceChip(
-                    label: Text(e.key, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                  final baseColor = _bandChipBase(band);
+                  return FilterChip(
+                    label: Text(e.key),
                     selected: selected,
                     onSelected: (_){
                       setState(() {
@@ -633,8 +643,16 @@ jobs:
                         }
                       });
                     },
-                    selectedColor: baseColor,
+                    showCheckmark: false,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    labelStyle: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                    selectedLabelStyle: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
                     backgroundColor: baseColor.withOpacity(0.6),
+                    selectedColor: baseColor,
+                    side: BorderSide(color: baseColor.withOpacity(0.0)),
+                    shape: const StadiumBorder(),
                   );
                 }).toList(),
               );
@@ -710,7 +728,10 @@ jobs:
                     builder: (_,ctrl)=>Container(
                       padding: const EdgeInsets.fromLTRB(16,12,16,16),
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Row(children:[Expanded(child: Text(title, style: Theme.of(context).textTheme.titleLarge)), IconButton(onPressed: ()=>Navigator.pop(context), icon: const Icon(Icons.close))]),
+                        Row(children:[
+                          Expanded(child: Text(title, style: Theme.of(context).textTheme.titleLarge)),
+                          IconButton(onPressed: ()=>Navigator.pop(context), icon: const Icon(Icons.close))
+                        ]),
                         const Divider(),
                         Expanded(child: SingleChildScrollView(controller: ctrl, child: SelectableText(text, textAlign: TextAlign.justify))),
                         const SizedBox(height:8),
@@ -778,7 +799,14 @@ jobs:
               return Scaffold(
                 appBar: AppBar(
                   title: const Text('CTR Color App'),
-                  actions: [ IconButton(onPressed:_openSettings, icon: const Icon(Icons.settings)) ],
+                  actions: [
+                    IconButton(
+                      tooltip: 'Toggle Dark/Light',
+                      onPressed: widget.onToggleTheme,
+                      icon: Icon(Theme.of(context).brightness==Brightness.dark ? Icons.light_mode_outlined : Icons.dark_mode_outlined),
+                    ),
+                    IconButton(onPressed:_openSettings, icon: const Icon(Icons.settings)),
+                  ],
                 ),
                 body: Padding(
                   padding: const EdgeInsets.all(12),
@@ -850,7 +878,7 @@ jobs:
               );
             }
 
-            // -------- Settings dialog (includes Theme)
+            // -------- Settings dialog (بدون بخش Theme)
             void _openSettings(){
               final ctrl = TextEditingController(text: _customAiUrl ?? '');
               showDialog(context: context, builder: (_){
@@ -858,10 +886,6 @@ jobs:
                   builder: (ctx, setS) {
                     final wRank = _rankBias;
                     final wCTR = 1.0 - _rankBias;
-                    ThemeMode currentTheme = (context.findAncestorWidgetOfExactType<CTRColorApp>() as CTRColorApp?) == null
-                      ? ThemeMode.system
-                      : (widget.currentTheme);
-
                     return AlertDialog(
                       title: const Text('تنظیمات'),
                       content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -882,21 +906,6 @@ jobs:
                           onChanged: (v)=> setS(()=>_rankBias=v),
                         ),
                         Row(children:[const Text('Rank Growth'), const Spacer(), Text('${(wRank*100).toStringAsFixed(0)}%')]),
-                        const SizedBox(height:12),
-                        const Divider(),
-                        const SizedBox(height:8),
-                        const Text('ظاهر (Appearance):'),
-                        const SizedBox(height:8),
-                        DropdownButton<ThemeMode>(
-                          value: currentTheme,
-                          isExpanded: true,
-                          items: const [
-                            DropdownMenuItem(value: ThemeMode.system, child: Text('System Default')),
-                            DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
-                            DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
-                          ],
-                          onChanged: (m){ if(m!=null){ setS(()=> currentTheme=m); } },
-                        ),
                       ]),
                       actions: [
                         TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('Cancel')),
@@ -907,7 +916,6 @@ jobs:
                           else { await sp.setString(_kPrefsAiUrl, v); setState(()=>_customAiUrl=v); }
                           await sp.setDouble(_kPrefsTol, _tolerance);
                           await sp.setDouble(_kPrefsBalance, _rankBias);
-                          widget.onChangeTheme(currentTheme);
                           if(mounted) setState((){});
                           Navigator.pop(context);
                         }, child: const Text('Save'))
@@ -938,7 +946,7 @@ jobs:
           grep -q 'android.permission.INTERNET' "$MANIFEST" || \
             sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <application|g' "$MANIFEST"
 
-      # نسخه‌های Kotlin/AGP را به پیش‌فرض Flutter می‌سپاریم (استپ اجباری حذف شد)
+      # Use Flutter's default Kotlin/AGP versions (no manual pinning)
 
       - name: Setup Gradle (cache)
         uses: gradle/actions/setup-gradle@v3
@@ -956,7 +964,7 @@ jobs:
             if [ $attempts -ge 3 ]; then
               echo "Gradle warmup failed after $attempts attempts."
               exit 1
-            fi
+            }
             echo "Retrying Gradle warmup in 20s ($attempts/3)..."
             sleep 20
           done
@@ -978,8 +986,6 @@ jobs:
               echo "Build failed after $attempts attempts."
               echo "== Last 300 lines of flutter/gradle log =="
               tail -n 300 "$LOGFILE" || true
-              echo "== Any Gradle logs =="
-              find android -name "*.log" -print -exec tail -n 200 {} \; || true
               echo "== Build dir tree =="
               ls -R build || true
               exit 1
