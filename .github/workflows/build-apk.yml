@@ -36,7 +36,7 @@ jobs:
           name: ctr_color_app
           description: CTR/Pos/Impr/Clicks with Opportunity Labels (fa) + per-page AI
           publish_to: "none"
-          version: 1.7.0+18
+          version: 1.9.0+20
 
           environment:
             sdk: ">=3.3.0 <4.0.0"
@@ -103,11 +103,12 @@ jobs:
           class Benchmark { final double fromPos,toPos,minCTR,maxCTR; Benchmark(this.fromPos,this.toPos,this.minCTR,this.maxCTR); }
 
           enum ColorClass { redStrong, redLight, gray, greenLight, greenStrong, warn }
+
           class ResultRow {
             final PageRow row;
             final ColorClass colorClass;
             final Benchmark? bm;
-            final String oppLabel; // متن Opportunity
+            final String oppLabel;
             ResultRow(this.row,this.colorClass,this.bm,this.oppLabel);
           }
 
@@ -128,13 +129,19 @@ jobs:
           class _HomeScreenState extends State<HomeScreen>{
             xls.Excel? _excel; String? _dataSheetName; List<String> _headers=[]; List<List<String>> _table=[];
             int? _colText,_colCTR,_colPos,_colImp,_colClk;
-            List<Benchmark> _benchmarks=[]; bool _bmFromSheet=false; List<ResultRow> _results=[];
+            List<Benchmark> _benchmarks=[]; bool _bmFromSheet=false;
             String? _bmSheetName;
+            List<ResultRow> _results=[];
+
+            // prefs
             static const _kPrefsTol='tolerance';
+            static const _kPrefsAiUrl='custom_ai_url';
+            static const _kPrefsBalance='rank_bias'; // 0..1 (0=CTR-heavy, 1=Rank-heavy)
             double _tolerance = 0.10;
+            String? _customAiUrl;
+            double _rankBias = 0.5; // slider
 
-            String? _customAiUrl; static const _kPrefsAiUrl='custom_ai_url';
-
+            // UI state
             String _query='';
             Set<ColorClass> _filterBands = {};
             String _sort='posAsc';
@@ -142,7 +149,11 @@ jobs:
             @override void initState(){ super.initState(); _loadPrefs(); }
             Future<void> _loadPrefs() async {
               final sp = await SharedPreferences.getInstance();
-              setState((){ _customAiUrl = sp.getString(_kPrefsAiUrl); _tolerance = sp.getDouble(_kPrefsTol) ?? 0.10; });
+              setState((){
+                _customAiUrl = sp.getString(_kPrefsAiUrl);
+                _tolerance = sp.getDouble(_kPrefsTol) ?? 0.10;
+                _rankBias = sp.getDouble(_kPrefsBalance) ?? 0.5;
+              });
             }
 
             String _normDigits(String s){ const m={'۰':'0','۱':'1','۲':'2','۳':'3','۴':'4','۵':'5','۶':'6','۷':'7','۸':'8','۹':'9','٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9'}; var o=s; m.forEach((k,v)=>o=o.replaceAll(k,v)); return o; }
@@ -250,17 +261,27 @@ jobs:
               return ColorClass.greenStrong;
             }
 
-            double _posAdv(double pos) => (pos <= 10) ? (10 - pos) / 9.0 : 0.0;
+            double _posAdv(double pos) => (pos > 0 && pos <= 10) ? (10 - pos) / 9.0 : 0.0;
 
-            double _oppScore(double ctr, Benchmark bm, double impr, double clicks){
-              final ctrBench = (bm.minCTR + bm.maxCTR) / 2.0;
-              final gap = (ctrBench - ctr);
-              if (gap <= 0) return 0.0;
-              final base = gap * math.log(1 + math.max(0, impr));
-              final withClicks = base * math.log(1 + math.max(0, clicks));
-              return withClicks;
+            // ------------------- NEW SCORE FUNCTION (Hybrid) -------------------
+            // Opportunity = w_ctr * (Gap/CTR_expected) * Impr  +  w_rank * ((MaxPos-Pos)/MaxPos) * Impr
+            double _oppScore({
+              required double ctr,
+              required Benchmark bm,
+              required double pos,
+              required double impr,
+              required double wCtr,
+              required double wRank,
+              int maxPos = 10,
+            }){
+              final ctrExpected = (bm.minCTR + bm.maxCTR) / 2.0;
+              final gap = ctrExpected - ctr; // اگر مثبت باشد یعنی ظرفیت رشد CTR
+              final ctrPart = gap > 0 ? wCtr * (gap / ctrExpected) * impr : 0.0;
+              final posPart = (pos > 0 && pos <= maxPos) ? wRank * ((maxPos - pos) / maxPos) * impr : 0.0;
+              return ctrPart + posPart;
             }
 
+            // برچسب‌ها بر اساس صدک امتیاز و شرط موقعیت
             String _oppLabel({
               required double score,
               required double posAdv,
@@ -270,14 +291,13 @@ jobs:
               required bool gapPositive,
             }){
               if(!hasBenchmark) return 'Needs Benchmark';
-              if(!gapPositive) return 'Protect Top';
-              // سطوح کیفی بر اساس صدک‌ها
+              if(!gapPositive) return 'Protect Top'; // CTR بالاتر از انتظار است → دستکاری بزرگ نکن
               if (score >= p80) return posAdv >= 0.6 ? 'Quick Win' : 'High Opportunity';
               if (score >= p60) return 'Moderate Growth';
               return 'Low Potential';
             }
 
-            // محاسبه‌ی صدک ساده (linear interpolation)
+            // صدک خطی
             double _percentile(List<double> data, double p){
               if (data.isEmpty) return 0.0;
               final list = [...data]..sort();
@@ -293,13 +313,17 @@ jobs:
               final issues = _validateData();
               if (issues.isNotEmpty){ _showIssues(issues); return; }
 
-              // پاس اول: محاسبه‌ی امتیاز Opportunity خام برای صدک‌ها
+              // وزن‌ها از اسلایدر:  wRank = _rankBias, wCtr = 1 - _rankBias
+              final wRank = _rankBias.clamp(0.0, 1.0);
+              final wCtr  = (1.0 - _rankBias).clamp(0.0, 1.0);
+
               final tempScores = <double>[];
               final tempRows = <Map<String,dynamic>>[];
 
               for(var i=0;i<_table.length;i++){
                 final row=_table[i];
                 if(_colText!>=row.length||_colCTR!>=row.length||_colPos!>=row.length||_colImp!>=row.length||_colClk!>=row.length) continue;
+
                 final text=row[_colText!], cRaw=row[_colCTR!], pRaw=row[_colPos!], iRaw=row[_colImp!], kRaw=row[_colClk!];
                 final ctr=_ctr(cRaw), pos=_num(pRaw), impr=_num(iRaw), clk=_num(kRaw);
 
@@ -310,14 +334,18 @@ jobs:
 
                 double score=0.0;
                 bool gapPositive=false;
-                if(bm!=null && !ctr.isNaN && !pos.isNaN && !impr.isNaN && !clk.isNaN){
-                  final benchMid=(bm.minCTR+bm.maxCTR)/2.0;
-                  gapPositive = (benchMid - ctr) > 0;
-                  score=_oppScore(ctr,bm,impr,clk);
+                if(bm!=null && !ctr.isNaN && !pos.isNaN && !impr.isNaN){
+                  final ctrExpected=(bm.minCTR+bm.maxCTR)/2.0;
+                  gapPositive = (ctrExpected - ctr) > 0;
+                  score = _oppScore(
+                    ctr: ctr, bm: bm, pos: pos, impr: impr,
+                    wCtr: wCtr, wRank: wRank, maxPos: 10
+                  );
                 }
+
                 tempRows.add({
                   'text':text,'cRaw':cRaw,'pRaw':pRaw,'iRaw':iRaw,'kRaw':kRaw,
-                  'ctr':ctr,'pos':pos,'impr':impr,'clk':clk,'bm':bm,'score':score,'gapPositive':gapPositive,
+                  'ctr':ctr,'pos':pos,'impr':impr,'clk':clk,'bm':bm,'score':score,'gapPositive':gapPositive,'rowIndex':i+2
                 });
                 if(score>0) tempScores.add(score);
               }
@@ -325,14 +353,11 @@ jobs:
               final p60 = _percentile(tempScores, 60);
               final p80 = _percentile(tempScores, 80);
 
-              // پاس دوم: ساخت ResultRow با برچسب Opportunity
               final out=<ResultRow>[];
               for(final m in tempRows){
                 final bm = m['bm'] as Benchmark?;
                 final ctr = m['ctr'] as double;
                 final pos = m['pos'] as double;
-                final impr= m['impr'] as double;
-                final clk = m['clk'] as double;
                 final score = m['score'] as double;
                 final gapPositive = m['gapPositive'] as bool;
 
@@ -355,7 +380,7 @@ jobs:
 
                 out.add(ResultRow(
                   PageRow(
-                    text: m['text'], ctrRaw: m['cRaw'], posRaw: m['pRaw'], impRaw: m['iRaw'], clkRaw: m['kRaw'], rowIndex:  m['rowIndex']??0
+                    text: m['text'], ctrRaw: m['cRaw'], posRaw: m['pRaw'], impRaw: m['iRaw'], clkRaw: m['kRaw'], rowIndex: m['rowIndex'] as int
                   ),
                   band, bm, label
                 ));
@@ -391,7 +416,7 @@ jobs:
               final payload = {
                 "mode":"single",
                 "meta":{"datasetName": _dataSheetName ?? "dataset"},
-                "settings":{"tolerance": _tolerance},
+                "settings":{"tolerance": _tolerance, "rankBias": _rankBias},
                 "benchmarks": r.bm==null?[]:[{"from":r.bm!.fromPos,"to":r.bm!.toPos,"min":r.bm!.minCTR,"max":r.bm!.maxCTR}],
                 "page":{
                   "url": r.row.text,
@@ -509,13 +534,9 @@ jobs:
 
               return Column(
                 children: [
-                  Row(children: [
-                    for (int i=0;i<4;i++) Padding(padding: const EdgeInsets.only(right: gap), child: btns[i]),
-                  ]),
+                  Row(children: [ for (int i=0;i<4;i++) Padding(padding: const EdgeInsets.only(right: gap), child: btns[i]) ]),
                   const SizedBox(height: gap),
-                  Row(children: [
-                    for (int i=4;i<7;i++) Padding(padding: const EdgeInsets.only(right: gap), child: btns[i]),
-                  ]),
+                  Row(children: [ for (int i=4;i<7;i++) Padding(padding: const EdgeInsets.only(right: gap), child: btns[i]) ]),
                 ],
               );
             }
@@ -611,20 +632,12 @@ jobs:
                         padding: const EdgeInsets.all(4),
                         child: Center(
                           child: Text.rich(
-                            TextSpan(
-                              children: [
-                                const TextSpan(text: 'ابتدا فایل اکسل را وارد و دکمه '),
-                                WidgetSpan(
-                                  alignment: PlaceholderAlignment.baseline,
-                                  baseline: TextBaseline.alphabetic,
-                                  child: Directionality(
-                                    textDirection: TextDirection.ltr,
-                                    child: const Text('Analyze Data'),
-                                  ),
-                                ),
-                                const TextSpan(text: ' را اجرا کنید.'),
-                              ],
-                            ),
+                            TextSpan(children: [
+                              const TextSpan(text: 'ابتدا فایل اکسل را وارد و دکمه '),
+                              WidgetSpan(alignment: PlaceholderAlignment.baseline, baseline: TextBaseline.alphabetic,
+                                child: Directionality(textDirection: TextDirection.ltr, child: const Text('Analyze Data'))),
+                              const TextSpan(text: ' را اجرا کنید.'),
+                            ]),
                             textAlign: TextAlign.center,
                           ),
                         ),
@@ -649,25 +662,16 @@ jobs:
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.start,
-                                  children: [
-                                    Text('CTR: ${_fmt(c)}', softWrap: false),
-                                    const SizedBox(width: 16), const Text('|'), const SizedBox(width: 16),
-                                    Text('Position: ${_fmt(p)}', softWrap: false),
-                                  ],
-                                ),
+                                Row(children: [
+                                  Text('CTR: ${_fmt(c)}'), const SizedBox(width: 16), const Text('|'), const SizedBox(width: 16),
+                                  Text('Position: ${_fmt(p)}'),
+                                ]),
                                 const SizedBox(height:4),
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.start,
-                                  children: [
-                                    Text('Impr: ${_fmt(im)}', softWrap: false),
-                                    const SizedBox(width: 16), const Text('|'), const SizedBox(width: 16),
-                                    Text('Clicks: ${_fmt(ck)}', softWrap: false),
-                                    const SizedBox(width: 16), const Text('|'), const SizedBox(width: 16),
-                                    Text('Opportunity: ${r.oppLabel}', softWrap: false),
-                                  ],
-                                ),
+                                Row(children: [
+                                  Text('Impr: ${_fmt(im)}'), const SizedBox(width: 16), const Text('|'), const SizedBox(width: 16),
+                                  Text('Clicks: ${_fmt(ck)}'), const SizedBox(width: 16), const Text('|'), const SizedBox(width: 16),
+                                  Text('Opportunity: ${r.oppLabel}'),
+                                ]),
                               ],
                             ),
                           ),
@@ -695,33 +699,49 @@ jobs:
             void _openSettings(){
               final ctrl = TextEditingController(text: _customAiUrl ?? '');
               showDialog(context: context, builder: (_){
-                return Directionality(textDirection: TextDirection.rtl, child: AlertDialog(
-                  title: const Text('تنظیمات'),
-                  content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const Text('آدرس سرویس هوش مصنوعی (خالی = پیش‌فرض):'),
-                    const SizedBox(height:8),
-                    TextField(controller: ctrl, decoration: const InputDecoration(border: OutlineInputBorder(), hintText:'https://your-proxy.vercel.app/api/analyze')),
-                    const SizedBox(height:12),
-                    Text('تلورانس (۰ تا ۵۰٪)', style: const TextStyle(fontSize: 12)),
-                    StatefulBuilder(builder: (ctx, setS){
-                      return Column(children: [
+                return Directionality(textDirection: TextDirection.rtl, child: StatefulBuilder(
+                  builder: (ctx, setS) {
+                    final wRank = _rankBias;
+                    final wCTR = 1.0 - _rankBias;
+                    return AlertDialog(
+                      title: const Text('تنظیمات'),
+                      content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        const Text('آدرس سرویس هوش مصنوعی (خالی = پیش‌فرض):'),
+                        const SizedBox(height:8),
+                        TextField(controller: ctrl, decoration: const InputDecoration(border: OutlineInputBorder(), hintText:'https://your-proxy.vercel.app/api/analyze')),
+                        const SizedBox(height:12),
+                        const Text('تلورانس رنگ‌بندی CTR (۰ تا ۵۰٪)', style: TextStyle(fontSize: 12)),
                         Slider(value: _tolerance, min:0, max:0.5, divisions:50, label:'${(_tolerance*100).toStringAsFixed(0)}%', onChanged:(v)=> setS(()=>_tolerance=v)),
                         Text('Tolerance: ${(_tolerance*100).toStringAsFixed(0)}%'),
-                      ]);
-                    }),
-                  ]),
-                  actions: [
-                    TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('Cancel')),
-                    TextButton(onPressed: () async {
-                      final sp=await SharedPreferences.getInstance();
-                      final v=ctrl.text.trim();
-                      if(v.isEmpty){ await sp.remove(_kPrefsAiUrl); setState(()=>_customAiUrl=null); }
-                      else { await sp.setString(_kPrefsAiUrl, v); setState(()=>_customAiUrl=v); }
-                      await sp.setDouble(_kPrefsTol, _tolerance);
-                      if(mounted) setState((){});
-                      Navigator.pop(context);
-                    }, child: const Text('Save'))
-                  ],
+                        const SizedBox(height:16),
+                        const Divider(),
+                        const SizedBox(height:8),
+                        Row(children:[const Text('CTR Optimization'), const Spacer(), Text('${(wCTR*100).toStringAsFixed(0)}%')]),
+                        Slider(
+                          value: _rankBias, min: 0, max: 1, divisions: 20,
+                          label: _rankBias<0.5 ? 'CTR-focused' : (_rankBias>0.5 ? 'Rank-focused' : 'Balanced'),
+                          onChanged: (v)=> setS(()=>_rankBias=v),
+                        ),
+                        Row(children:[const Text('Rank Growth'), const Spacer(), Text('${(wRank*100).toStringAsFixed(0)}%')]),
+                        const SizedBox(height:6),
+                        Text('Weights →  Rank: ${wRank.toStringAsFixed(2)}   |   CTR: ${wCTR.toStringAsFixed(2)}',
+                          style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                      ]),
+                      actions: [
+                        TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('Cancel')),
+                        TextButton(onPressed: () async {
+                          final sp=await SharedPreferences.getInstance();
+                          final v=ctrl.text.trim();
+                          if(v.isEmpty){ await sp.remove(_kPrefsAiUrl); setState(()=>_customAiUrl=null); }
+                          else { await sp.setString(_kPrefsAiUrl, v); setState(()=>_customAiUrl=v); }
+                          await sp.setDouble(_kPrefsTol, _tolerance);
+                          await sp.setDouble(_kPrefsBalance, _rankBias);
+                          if(mounted) setState((){});
+                          Navigator.pop(context);
+                        }, child: const Text('Save'))
+                      ],
+                    );
+                  },
                 ));
               });
             }
