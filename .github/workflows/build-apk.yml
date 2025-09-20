@@ -940,13 +940,33 @@ jobs:
           sed -i "s|__AI_PROXY_URL__|$URL_ESC|g" app/lib/main.dart
           echo "Injected URL: ${URL:-<empty>}"
 
+      # --- Android config fixes (minSdk/compile/target + INTERNET permission) ---
+      - name: Configure Android SDK versions
+        working-directory: app/android
+        run: |
+          set -euo pipefail
+          APP_GRADLE=app/build.gradle
+          sed -i 's/minSdkVersion[[:space:]]\+flutter\.minSdkVersion/minSdkVersion 23/g' "$APP_GRADLE" || true
+          sed -i 's/compileSdkVersion[[:space:]]\+flutter\.compileSdkVersion/compileSdkVersion 34/g' "$APP_GRADLE" || true
+          sed -i 's/targetSdkVersion[[:space:]]\+flutter\.targetSdkVersion/targetSdkVersion 34/g' "$APP_GRADLE" || true
+          sed -i 's/minSdkVersion[[:space:]]\+[0-9][0-9]*/minSdkVersion 23/g' "$APP_GRADLE" || true
+          sed -i 's/compileSdkVersion[[:space:]]\+[0-9][0-9]*/compileSdkVersion 34/g' "$APP_GRADLE" || true
+          sed -i 's/targetSdkVersion[[:space:]]\+[0-9][0-9]*/targetSdkVersion 34/g' "$APP_GRADLE" || true
+
       - name: Ensure INTERNET permission
         run: |
+          set -euo pipefail
           MANIFEST=app/android/app/src/main/AndroidManifest.xml
-          grep -q 'android.permission.INTERNET' "$MANIFEST" || \
-            sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <application|g' "$MANIFEST"
-
-      # Use Flutter's default Kotlin/AGP versions (no manual pinning)
+          if ! grep -q 'android.permission.INTERNET' "$MANIFEST"; then
+            awk '
+              BEGIN{inserted=0}
+              /<manifest[^>]*>/ && inserted==0 {
+                print $0 RS "    <uses-permission android:name=\"android.permission.INTERNET\"/>"
+                inserted=1; next
+              }
+              {print}
+            ' "$MANIFEST" > "$MANIFEST.tmp" && mv "$MANIFEST.tmp" "$MANIFEST"
+          fi
 
       - name: Setup Gradle (cache)
         uses: gradle/actions/setup-gradle@v3
