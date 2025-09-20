@@ -34,9 +34,9 @@ jobs:
         run: |
           cat > app/pubspec.yaml << 'YAML'
           name: ctr_color_app
-          description: CTR/Pos/Impr/Clicks with Opportunity Labels (fa) + per-page AI
+          description: CTR/Pos/Impr/Clicks with Opportunity Labels (fa) + per-page AI + Dark Mode
           publish_to: "none"
-          version: 2.0.0+21
+          version: 2.1.0+22
 
           environment:
             sdk: ">=3.3.0 <4.0.0"
@@ -82,6 +82,7 @@ jobs:
           const String _kFallbackProxy = 'https://ctr-ai-proxy-iwqf.vercel.app/api/analyze';
           String get kAiProxyUrl => _kInjectedProxy.startsWith('http') ? _kInjectedProxy : _kFallbackProxy;
 
+          // ===================== Models =====================
           class PageRow {
             final String text;
             final String ctrRaw;
@@ -111,49 +112,111 @@ jobs:
             ResultRow(this.row,this.colorClass,this.bm,this.oppLabel);
           }
 
-          // ---------- THEME (ظاهر حرفه‌ای) ----------
-          class CTRColorApp extends StatelessWidget {
+          // ===================== App with ThemeMode =====================
+          class CTRColorApp extends StatefulWidget {
             const CTRColorApp({super.key});
-            @override
-            Widget build(BuildContext context) {
-              final base = ThemeData(
-                colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
+            @override State<CTRColorApp> createState()=>_CTRColorAppState();
+          }
+
+          class _CTRColorAppState extends State<CTRColorApp> {
+            static const _kPrefsTheme='theme_mode'; // 'system' | 'light' | 'dark'
+            ThemeMode _themeMode = ThemeMode.system;
+
+            @override void initState(){ super.initState(); _loadTheme(); }
+            Future<void> _loadTheme() async {
+              final sp = await SharedPreferences.getInstance();
+              final raw = sp.getString(_kPrefsTheme) ?? 'system';
+              setState(()=> _themeMode = {
+                'light': ThemeMode.light, 'dark': ThemeMode.dark, 'system': ThemeMode.system
+              }[raw] ?? ThemeMode.system);
+            }
+            Future<void> _saveTheme(ThemeMode m) async {
+              final sp = await SharedPreferences.getInstance();
+              final raw = m==ThemeMode.dark?'dark': m==ThemeMode.light?'light':'system';
+              await sp.setString(_kPrefsTheme, raw);
+              setState(()=>_themeMode=m);
+            }
+
+            ThemeData _lightTheme(){
+              final base = ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal), useMaterial3: true);
+              return base.copyWith(
+                scaffoldBackgroundColor: const Color(0xFFF7FAF9),
+                appBarTheme: base.appBarTheme.copyWith(
+                  elevation: 0, backgroundColor: const Color(0xFFE9F5F2),
+                  titleTextStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 20, color: Colors.teal),
+                  iconTheme: const IconThemeData(color: Colors.teal),
+                ),
+                cardTheme: const CardTheme(
+                  margin: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(18))),
+                ),
+                chipTheme: base.chipTheme.copyWith(
+                  shape: const StadiumBorder(),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  labelStyle: const TextStyle(fontWeight: FontWeight.w600, color: Colors.black87),
+                ),
+                listTileTheme: const ListTileThemeData(
+                  contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  titleTextStyle: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                  subtitleTextStyle: TextStyle(fontSize: 13),
+                ),
+                dividerColor: Colors.black12,
+              );
+            }
+
+            ThemeData _darkTheme(){
+              final dark = ThemeData(
+                colorScheme: const ColorScheme.dark(
+                  primary: Color(0xFF53C1A9),
+                  surface: Color(0xFF121416),
+                  surfaceVariant: Color(0xFF1C2124),
+                  secondary: Color(0xFF79D2BF),
+                ),
                 useMaterial3: true,
               );
+              return dark.copyWith(
+                scaffoldBackgroundColor: const Color(0xFF0F1214),
+                appBarTheme: dark.appBarTheme.copyWith(
+                  elevation: 0, backgroundColor: const Color(0xFF0F1214),
+                  titleTextStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 20, color: Color(0xFF79D2BF)),
+                  iconTheme: const IconThemeData(color: Color(0xFF79D2BF)),
+                ),
+                cardTheme: const CardTheme(
+                  margin: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(18))),
+                ),
+                chipTheme: dark.chipTheme.copyWith(
+                  shape: const StadiumBorder(),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  labelStyle: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
+                ),
+                dividerColor: Colors.white12,
+              );
+            }
+
+            @override
+            Widget build(BuildContext context) {
               return MaterialApp(
                 title: 'CTR Color App',
-                theme: base.copyWith(
-                  scaffoldBackgroundColor: const Color(0xFFF7FAF9),
-                  appBarTheme: base.appBarTheme.copyWith(
-                    elevation: 0,
-                    backgroundColor: const Color(0xFFE9F5F2),
-                    titleTextStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 20, color: Colors.teal),
-                    iconTheme: const IconThemeData(color: Colors.teal),
-                  ),
-                  cardTheme: const CardTheme(
-                    margin: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(18))),
-                  ),
-                  chipTheme: base.chipTheme.copyWith(
-                    shape: const StadiumBorder(),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    labelStyle: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  listTileTheme: const ListTileThemeData(
-                    contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    titleTextStyle: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
-                    subtitleTextStyle: TextStyle(fontSize: 13),
-                  ),
-                  dividerColor: Colors.black12,
-                ),
-                home: const HomeScreen(),
+                theme: _lightTheme(),
+                darkTheme: _darkTheme(),
+                themeMode: _themeMode,
+                home: HomeScreen(onChangeTheme: _saveTheme, currentTheme: _themeMode),
                 locale: const Locale('fa'),
               );
             }
           }
 
-          class HomeScreen extends StatefulWidget { const HomeScreen({super.key}); @override State<HomeScreen> createState()=>_HomeScreenState(); }
+          // ===================== HomeScreen =====================
+          class HomeScreen extends StatefulWidget {
+            final void Function(ThemeMode) onChangeTheme;
+            final ThemeMode currentTheme;
+            const HomeScreen({super.key, required this.onChangeTheme, required this.currentTheme});
+            @override State<HomeScreen> createState()=>_HomeScreenState();
+          }
+
           class _HomeScreenState extends State<HomeScreen>{
             xls.Excel? _excel; String? _dataSheetName; List<String> _headers=[]; List<List<String>> _table=[];
             int? _colText,_colCTR,_colPos,_colImp,_colClk;
@@ -164,10 +227,10 @@ jobs:
             // prefs
             static const _kPrefsTol='tolerance';
             static const _kPrefsAiUrl='custom_ai_url';
-            static const _kPrefsBalance='rank_bias'; // 0..1 (0=CTR-heavy, 1=Rank-heavy)
+            static const _kPrefsBalance='rank_bias'; // 0..1
             double _tolerance = 0.10;
             String? _customAiUrl;
-            double _rankBias = 0.5; // slider
+            double _rankBias = 0.5;
 
             // UI state
             String _query='';
@@ -184,13 +247,13 @@ jobs:
               });
             }
 
-            // ---------- Parsers ----------
+            // -------- Parsers
             String _normDigits(String s){ const m={'۰':'0','۱':'1','۲':'2','۳':'3','۴':'4','۵':'5','۶':'6','۷':'7','۸':'8','۹':'9','٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9'}; var o=s; m.forEach((k,v)=>o=o.replaceAll(k,v)); return o; }
             double _num(String v){ try{ var s=_normDigits(v.trim()).replaceAll('%','').replaceAll('٪','').replaceAll(',','').replaceAll('٬','').replaceAll('،','').replaceAll('٫','.'); return double.parse(s);}catch(_){ return double.nan; } }
             double _ctr(String v) => _num(v);
             String _fmt(double x){ if (x.isNaN) return ''; final isInt = x.truncateToDouble()==x; return isInt ? x.toStringAsFixed(0) : x.toStringAsFixed(2); }
 
-            // ---------- Load Excel ----------
+            // -------- Excel
             Future<void> _pickExcel() async{
               try{
                 setState(()=>{_excel=null,_headers=[],_table=[],_colText=null,_colCTR=null,_colPos=null,_colImp=null,_colClk=null,_benchmarks=[],_bmFromSheet=false,_results=[],_bmSheetName=null});
@@ -274,13 +337,26 @@ jobs:
               }
               if (badCtr > 0) issues.add('Invalid CTR in $badCtr row(s).');
               if (badPos > 0) issues.add('Invalid Position in $badPos row(s).');
-              if (badImp > 0) issues.add('Invalid Impressions in $badImp row(s).');
+              if (badImp > 0) issues add('Invalid Impressions in $badImp row(s).');
               if (badClk > 0) issues.add('Invalid Clicks in $badClk row(s).');
               if (_benchmarks.isEmpty) issues.add('Benchmarks are missing. Add a "Benchmarks" sheet.');
               return issues;
             }
 
-            // ---------- رنگ‌بندی CTR نسبت به بنچمارک ----------
+            // -------- Band color
+            Color _bandColor(ColorClass c){
+              final isDark = Theme.of(context).brightness==Brightness.dark;
+              switch(c){
+                case ColorClass.redStrong:   return isDark? const Color(0xFF5E2B2B) : const Color(0xFFFFCDD2);
+                case ColorClass.redLight:    return isDark? const Color(0xFF6B3B3B) : const Color(0xFFFFEBEE);
+                case ColorClass.gray:        return isDark? const Color(0xFF2A2F33) : const Color(0xFFECEFF1);
+                case ColorClass.greenLight:  return isDark? const Color(0xFF23493B) : const Color(0xFFB7E4C7);
+                case ColorClass.greenStrong: return isDark? const Color(0xFF1F4B3F) : const Color(0xFF9BE7C4);
+                case ColorClass.warn:        return isDark? const Color(0xFF5A4A1E) : const Color(0xFFFFEBA0);
+              }
+            }
+
+            // -------- CTR banding
             ColorClass _classify(double ctr, Benchmark bm){
               final tol = _tolerance; final minT=bm.minCTR, maxT=bm.maxCTR;
               final minStrong = minT * (1 - tol);
@@ -294,8 +370,7 @@ jobs:
 
             double _posAdv(double pos) => (pos > 0 && pos <= 10) ? (10 - pos) / 9.0 : 0.0;
 
-            // ---------- امتیاز فرصت (فرمول نهایی) ----------
-            // Opportunity = w_ctr * (Gap/CTR_expected) * Impr  +  w_rank * ((MaxPos-Pos)/MaxPos) * Impr
+            // -------- Opportunity score (Hybrid)
             double _oppScore({
               required double ctr,
               required Benchmark bm,
@@ -306,7 +381,7 @@ jobs:
               int maxPos = 10,
             }){
               final ctrExpected = (bm.minCTR + bm.maxCTR) / 2.0;
-              final gap = ctrExpected - ctr; // + یعنی ظرفیت رشد CTR
+              final gap = ctrExpected - ctr;
               final ctrPart = gap > 0 ? wCtr * (gap / ctrExpected) * impr : 0.0;
               final posPart = (pos > 0 && pos <= maxPos) ? wRank * ((maxPos - pos) / maxPos) * impr : 0.0;
               return ctrPart + posPart;
@@ -338,22 +413,11 @@ jobs:
               return list[lo] + (list[hi]-list[lo]) * frac;
             }
 
-            // ---------- رنگ پس‌زمینه کارت‌ها ----------
-            Color _bandColor(ColorClass c){
-              switch(c){
-                case ColorClass.redStrong:   return const Color(0xFFFFCDD2);
-                case ColorClass.redLight:    return const Color(0xFFFFEBEE);
-                case ColorClass.gray:        return const Color(0xFFECEFF1);
-                case ColorClass.greenLight:  return const Color(0xFFB7E4C7);
-                case ColorClass.greenStrong: return const Color(0xFF9BE7C4);
-                case ColorClass.warn:        return const Color(0xFFFFEBA0);
-              }
-            }
-
-            // ---------- برچسب Opportunity: رنگ/آیکون ----------
+            // -------- Labels color/icon
             Color _labelColor(String lbl){
+              final isDark = Theme.of(context).brightness==Brightness.dark;
               switch (lbl) {
-                case 'Quick Win': return const Color(0xFF2E7D32);
+                case 'Quick Win': return isDark? const Color(0xFF2E7D32) : const Color(0xFF2E7D32);
                 case 'High Opportunity': return const Color(0xFF1E88E5);
                 case 'Moderate Growth': return const Color(0xFFFB8C00);
                 case 'Low Potential': return const Color(0xFF8D6E63);
@@ -371,22 +435,26 @@ jobs:
                 default: return Icons.info_outline;
               }
             }
-            Widget _kpiChip(String label, String value) {
+
+            // -------- KPI chip (خوانا در لایت/دارک)
+            Widget _kpiChip(BuildContext context, String label, String value) {
+              final cs = Theme.of(context).colorScheme;
+              final isDark = Theme.of(context).brightness==Brightness.dark;
               return Chip(
                 label: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Text('$label: ', style: const TextStyle(fontWeight: FontWeight.w600)),
-                  Text(value),
+                  Text('$label: ', style: TextStyle(fontWeight: FontWeight.w600, color: cs.onSurface)),
+                  Text(value, style: TextStyle(color: cs.onSurface)),
                 ]),
-                backgroundColor: Colors.white,
-                side: const BorderSide(color: Color(0xFFE0E0E0)),
+                backgroundColor: isDark ? cs.surfaceVariant.withOpacity(0.35) : Colors.white,
+                side: BorderSide(color: cs.outline.withOpacity(0.3)),
               );
             }
 
-            // ---------- کارت شیک هر صفحه ----------
+            // -------- Page card
             Widget _pageCard(ResultRow r){
               final uri = Uri.tryParse(r.row.text);
               final host = uri?.host.isNotEmpty == true ? uri!.host : r.row.text;
-              final path = (uri != null && (uri.path.isNotEmpty)) ? uri.path : '';
+              final path = (uri != null && uri.path.isNotEmpty) ? Uri.decodeFull(uri.path) : '';
               final c = _ctr(r.row.ctrRaw);
               final p = _num(r.row.posRaw);
               final im = _num(r.row.impRaw);
@@ -400,7 +468,7 @@ jobs:
                     colors: [bg.withOpacity(0.88), bg],
                   ),
                   borderRadius: const BorderRadius.all(Radius.circular(18)),
-                  border: Border.all(color: Colors.black12),
+                  border: Border.all(color: Theme.of(context).dividerColor),
                   boxShadow: const [BoxShadow(color: Color(0x14000000), blurRadius: 8, offset: Offset(0, 4))],
                 ),
                 margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -412,7 +480,7 @@ jobs:
                       TextSpan(children: [
                         TextSpan(text: host, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
                         if (path.isNotEmpty) const TextSpan(text: '  '),
-                        if (path.isNotEmpty) TextSpan(text: path, style: TextStyle(color: Colors.black.withOpacity(0.65))),
+                        if (path.isNotEmpty) TextSpan(text: path, style: TextStyle(color: Colors.white.withOpacity(0.85))),
                       ]),
                       textDirection: TextDirection.ltr,
                     ),
@@ -420,10 +488,10 @@ jobs:
                     Wrap(
                       spacing: 8, runSpacing: 8,
                       children: [
-                        _kpiChip('CTR', _fmt(c)),
-                        _kpiChip('Position', _fmt(p)),
-                        _kpiChip('Impr', _fmt(im)),
-                        _kpiChip('Clicks', _fmt(ck)),
+                        _kpiChip(context,'CTR', _fmt(c)),
+                        _kpiChip(context,'Position', _fmt(p)),
+                        _kpiChip(context,'Impr', _fmt(im)),
+                        _kpiChip(context,'Clicks', _fmt(ck)),
                         Chip(
                           avatar: Icon(_labelIcon(r.oppLabel), size: 18, color: Colors.white),
                           label: Text('Opportunity: ${r.oppLabel}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
@@ -453,7 +521,7 @@ jobs:
               );
             }
 
-            // ---------- محاسبه ----------
+            // -------- Compute
             void _compute(){
               final issues = _validateData();
               if (issues.isNotEmpty){ _showIssues(issues); return; }
@@ -533,15 +601,28 @@ jobs:
               setState(()=>_results=out);
             }
 
-            // ---------- UI: فیلترها به‌شکل ChoiceChip ----------
+            // -------- Filter chips with band colors
+            Color _bandChipColor(ColorClass? band){
+              switch(band){
+                case null: return Colors.blueGrey.shade400; // All
+                case ColorClass.redStrong: return Colors.red.shade400;
+                case ColorClass.redLight: return Colors.pink.shade300;
+                case ColorClass.gray: return Colors.grey.shade500;
+                case ColorClass.greenLight: return Colors.lightGreen.shade500;
+                case ColorClass.greenStrong: return Colors.green.shade600;
+                case ColorClass.warn: return Colors.orange.shade500;
+              }
+            }
+
             Widget _filtersGrid(BuildContext context, List<MapEntry<String, ColorClass?>> items){
               return Wrap(
                 spacing: 8, runSpacing: 8,
                 children: items.map((e){
                   final band = e.value;
                   final selected = band==null ? _filterBands.isEmpty : _filterBands.contains(band);
+                  final baseColor = _bandChipColor(band);
                   return ChoiceChip(
-                    label: Text(e.key),
+                    label: Text(e.key, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
                     selected: selected,
                     onSelected: (_){
                       setState(() {
@@ -552,15 +633,14 @@ jobs:
                         }
                       });
                     },
-                    selectedColor: Colors.teal.shade100,
-                    backgroundColor: Colors.white,
-                    side: const BorderSide(color: Color(0xFFE0E0E0)),
+                    selectedColor: baseColor,
+                    backgroundColor: baseColor.withOpacity(0.6),
                   );
                 }).toList(),
               );
             }
 
-            // ---------- Helper ----------
+            // -------- Helpers
             void _showIssues(List<String> issues){
               showDialog(context: context, builder: (_){
                 return Directionality(textDirection: TextDirection.rtl, child: AlertDialog(
@@ -647,7 +727,7 @@ jobs:
               });
             }
 
-            // ---------- صفحه ----------
+            // -------- UI
             @override Widget build(BuildContext context){
               final rS=_results.where((r)=>r.colorClass==ColorClass.redStrong).length;
               final rL=_results.where((r)=>r.colorClass==ColorClass.redLight).length;
@@ -770,7 +850,7 @@ jobs:
               );
             }
 
-            // ---------- Settings ----------
+            // -------- Settings dialog (includes Theme)
             void _openSettings(){
               final ctrl = TextEditingController(text: _customAiUrl ?? '');
               showDialog(context: context, builder: (_){
@@ -778,6 +858,10 @@ jobs:
                   builder: (ctx, setS) {
                     final wRank = _rankBias;
                     final wCTR = 1.0 - _rankBias;
+                    ThemeMode currentTheme = (context.findAncestorWidgetOfExactType<CTRColorApp>() as CTRColorApp?) == null
+                      ? ThemeMode.system
+                      : (widget.currentTheme);
+
                     return AlertDialog(
                       title: const Text('تنظیمات'),
                       content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -798,9 +882,21 @@ jobs:
                           onChanged: (v)=> setS(()=>_rankBias=v),
                         ),
                         Row(children:[const Text('Rank Growth'), const Spacer(), Text('${(wRank*100).toStringAsFixed(0)}%')]),
-                        const SizedBox(height:6),
-                        Text('Weights →  Rank: ${wRank.toStringAsFixed(2)}   |   CTR: ${wCTR.toStringAsFixed(2)}',
-                          style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                        const SizedBox(height:12),
+                        const Divider(),
+                        const SizedBox(height:8),
+                        const Text('ظاهر (Appearance):'),
+                        const SizedBox(height:8),
+                        DropdownButton<ThemeMode>(
+                          value: currentTheme,
+                          isExpanded: true,
+                          items: const [
+                            DropdownMenuItem(value: ThemeMode.system, child: Text('System Default')),
+                            DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
+                            DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
+                          ],
+                          onChanged: (m){ if(m!=null){ setS((){ currentTheme=m; }); } },
+                        ),
                       ]),
                       actions: [
                         TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('Cancel')),
@@ -811,6 +907,7 @@ jobs:
                           else { await sp.setString(_kPrefsAiUrl, v); setState(()=>_customAiUrl=v); }
                           await sp.setDouble(_kPrefsTol, _tolerance);
                           await sp.setDouble(_kPrefsBalance, _rankBias);
+                          widget.onChangeTheme(currentTheme);
                           if(mounted) setState((){});
                           Navigator.pop(context);
                         }, child: const Text('Save'))
