@@ -82,8 +82,20 @@ jobs:
           const String _kFallbackProxy = 'https://ctr-ai-proxy-iwqf.vercel.app/api/analyze';
           String get kAiProxyUrl => _kInjectedProxy.startsWith('http') ? _kInjectedProxy : _kFallbackProxy;
 
-          class PageRow { final String text; final String ctrRaw; final String posRaw; final int rowIndex;
-            PageRow({required this.text, required this.ctrRaw, required this.posRaw, required this.rowIndex}); }
+          class PageRow {
+            final String text;
+            final String ctrRaw;
+            final String posRaw;
+            final String impRaw; // NEW
+            final int rowIndex;
+            PageRow({
+              required this.text,
+              required this.ctrRaw,
+              required this.posRaw,
+              required this.impRaw, // NEW
+              required this.rowIndex,
+            });
+          }
           class Benchmark { final double fromPos,toPos,minCTR,maxCTR; Benchmark(this.fromPos,this.toPos,this.minCTR,this.maxCTR); }
 
           enum ColorClass { redStrong, redLight, gray, greenLight, greenStrong, warn }
@@ -105,7 +117,8 @@ jobs:
           class HomeScreen extends StatefulWidget { const HomeScreen({super.key}); @override State<HomeScreen> createState()=>_HomeScreenState(); }
           class _HomeScreenState extends State<HomeScreen>{
             xls.Excel? _excel; String? _dataSheetName; List<String> _headers=[]; List<List<String>> _table=[];
-            int? _colText,_colCTR,_colPos; List<Benchmark> _benchmarks=[]; bool _bmFromSheet=false; List<ResultRow> _results=[];
+            int? _colText,_colCTR,_colPos,_colImp; // NEW: _colImp
+            List<Benchmark> _benchmarks=[]; bool _bmFromSheet=false; List<ResultRow> _results=[];
             String? _bmSheetName;
             static const _kPrefsTol='tolerance';
             double _tolerance = 0.10;
@@ -129,7 +142,7 @@ jobs:
 
             Future<void> _pickExcel() async{
               try{
-                setState(()=>{_excel=null,_headers=[],_table=[],_colText=null,_colCTR=null,_colPos=null,_benchmarks=[],_bmFromSheet=false,_results=[],_bmSheetName=null});
+                setState(()=>{_excel=null,_headers=[],_table=[],_colText=null,_colCTR=null,_colPos=null,_colImp=null,_benchmarks=[],_bmFromSheet=false,_results=[],_bmSheetName=null});
                 final res=await FilePicker.platform.pickFiles(type:FileType.custom,allowedExtensions:['xlsx'],withData:true);
                 if(res==null||res.files.isEmpty) return;
                 final bytes=res.files.single.bytes; if(bytes==null){ _snack('Failed to read file bytes'); return; }
@@ -178,25 +191,32 @@ jobs:
               _colText = find(['url','address','page','landing','slug','title']) ?? 0;
               _colCTR  = find(['ctr','click-through','clickthrough']) ?? (_headers.length>1?1:null);
               _colPos  = find(['position','avg position','rank']) ?? (_headers.length>2?2:null);
+              // NEW: impressions
+              _colImp  = find(['impr','impression','impressions','imps','نمایش','ایمپرشن']);
               setState((){});
             }
 
             List<String> _validateData() {
               final issues = <String>[];
               if (_headers.isEmpty) issues.add('No data sheet loaded.');
-              if (_colText == null || _colCTR == null || _colPos == null) { issues.add('Please map all three columns (Text/CTR/Position).'); return issues; }
-              var badCtr = 0, badPos = 0;
+              if (_colText == null || _colCTR == null || _colPos == null || _colImp == null) {
+                issues.add('Please map all four columns (Text/CTR/Position/Impressions).');
+                return issues;
+              }
+              var badCtr = 0, badPos = 0, badImp = 0;
               for (var i = 0; i < _table.length; i++) {
                 final row = _table[i];
                 final t = _colText! < row.length ? row[_colText!] : '';
                 final c = _colCTR!  < row.length ? row[_colCTR!]  : '';
                 final p = _colPos!  < row.length ? row[_colPos!]  : '';
-                final ctr = _ctr(c), pos = _num(p);
+                final im = _colImp! < row.length ? row[_colImp!]  : '';
+                final ctr = _ctr(c), pos = _num(p), imp = _num(im);
                 if (t.trim().isEmpty) issues.add('Row ${i+2}: empty Text/URL');
-                if (ctr.isNaN) badCtr++; if (pos.isNaN) badPos++;
+                if (ctr.isNaN) badCtr++; if (pos.isNaN) badPos++; if (imp.isNaN) badImp++;
               }
               if (badCtr > 0) issues.add('Invalid CTR in $badCtr row(s).');
               if (badPos > 0) issues.add('Invalid Position in $badPos row(s).');
+              if (badImp > 0) issues.add('Invalid Impressions in $badImp row(s).');
               if (_benchmarks.isEmpty) issues.add('Benchmarks are missing. Add a "Benchmarks" sheet.');
               return issues;
             }
@@ -227,13 +247,14 @@ jobs:
               if (issues.isNotEmpty){ _showIssues(issues); return; }
               final out=<ResultRow>[];
               for(var i=0;i<_table.length;i++){
-                final row=_table[i]; if(_colText!>=row.length||_colCTR!>=row.length||_colPos!>=row.length) continue;
-                final text=row[_colText!], cRaw=row[_colCTR!], pRaw=row[_colPos!];
+                final row=_table[i];
+                if(_colText!>=row.length||_colCTR!>=row.length||_colPos!>=row.length||_colImp!>=row.length) continue;
+                final text=row[_colText!], cRaw=row[_colCTR!], pRaw=row[_colPos!], iRaw=row[_colImp!];
                 final c=_ctr(cRaw), p=_num(pRaw);
-                if(c.isNaN||p.isNaN){ out.add(ResultRow(PageRow(text:text,ctrRaw:cRaw,posRaw:pRaw,rowIndex:i+1),ColorClass.warn,null)); continue; }
+                if(c.isNaN||p.isNaN){ out.add(ResultRow(PageRow(text:text,ctrRaw:cRaw,posRaw:pRaw,impRaw:iRaw,rowIndex:i+1),ColorClass.warn,null)); continue; }
                 final bm=_benchmarks.firstWhereOrNull((b)=>p>=b.fromPos&&p<=b.toPos);
-                if(bm==null){ out.add(ResultRow(PageRow(text:text,ctrRaw:cRaw,posRaw:pRaw,rowIndex:i+1),ColorClass.warn,null)); continue; }
-                out.add(ResultRow(PageRow(text:text,ctrRaw:cRaw,posRaw:pRaw,rowIndex:i+1),_classify(c,bm),bm));
+                if(bm==null){ out.add(ResultRow(PageRow(text:text,ctrRaw:cRaw,posRaw:pRaw,impRaw:iRaw,rowIndex:i+1),ColorClass.warn,null)); continue; }
+                out.add(ResultRow(PageRow(text:text,ctrRaw:cRaw,posRaw:pRaw,impRaw:iRaw,rowIndex:i+1),_classify(c,bm),bm));
               }
               setState(()=>_results=out);
             }
@@ -257,7 +278,16 @@ jobs:
                 "meta":{"datasetName": _dataSheetName ?? "dataset"},
                 "settings":{"tolerance": _tolerance},
                 "benchmarks": r.bm==null?[]:[{"from":r.bm!.fromPos,"to":r.bm!.toPos,"min":r.bm!.minCTR,"max":r.bm!.maxCTR}],
-                "page":{"url": r.row.text, "posRaw": r.row.posRaw, "ctrRaw": r.row.ctrRaw, "pos": p, "ctr": c, "band": band}
+                "page":{
+                  "url": r.row.text,
+                  "posRaw": r.row.posRaw,
+                  "ctrRaw": r.row.ctrRaw,
+                  "imprRaw": r.row.impRaw,          // NEW
+                  "pos": p,
+                  "ctr": c,
+                  "impr": _num(r.row.impRaw),       // NEW
+                  "band": band
+                }
               };
 
               showDialog(context: context, barrierDismissible: false, builder: (_)=>const Center(child:CircularProgressIndicator()));
@@ -371,11 +401,14 @@ jobs:
               list.sort((a,b){
                 final ca=_ctr(a.row.ctrRaw), cb=_ctr(b.row.ctrRaw);
                 final pa=_num(a.row.posRaw), pb=_num(b.row.posRaw);
+                final ia=_num(a.row.impRaw), ib=_num(b.row.impRaw); // NEW
                 switch(_sort){
                   case 'posAsc':  return pa.compareTo(pb);
                   case 'posDesc': return pb.compareTo(pa);
                   case 'ctrAsc':  return ca.compareTo(cb);
                   case 'ctrDesc': return cb.compareTo(ca);
+                  case 'impAsc':  return ia.compareTo(ib); // NEW
+                  case 'impDesc': return ib.compareTo(ia); // NEW
                 }
                 return 0;
               });
@@ -435,10 +468,12 @@ jobs:
                       DropdownButton<String>(
                         value: _sort,
                         items: const [
-                          DropdownMenuItem(value:'posAsc', child: Text('Pos ↑')),
+                          DropdownMenuItem(value:'posAsc',  child: Text('Pos ↑')),
                           DropdownMenuItem(value:'posDesc', child: Text('Pos ↓')),
-                          DropdownMenuItem(value:'ctrAsc', child: Text('CTR ↑')),
+                          DropdownMenuItem(value:'ctrAsc',  child: Text('CTR ↑')),
                           DropdownMenuItem(value:'ctrDesc', child: Text('CTR ↓')),
+                          DropdownMenuItem(value:'impAsc',  child: Text('Impr ↑')), // NEW
+                          DropdownMenuItem(value:'impDesc', child: Text('Impr ↓')), // NEW
                         ],
                         onChanged:(v)=>setState(()=>_sort=v??'posAsc'),
                       ),
@@ -483,10 +518,9 @@ jobs:
                       itemBuilder:(ctx,i){
                         final r=_visible[i];
                         final bg=_bandColor(r.colorClass);
-                        final c=_ctr(r.row.ctrRaw), p=_num(r.row.posRaw);
+                        final c=_ctr(r.row.ctrRaw), p=_num(r.row.posRaw), im=_num(r.row.impRaw); // NEW
                         return Card(color:bg, child: ListTile(
                           title: Text(r.row.text, softWrap:true),
-                          // فاصلهٔ واضح بین CTR و Position
                           subtitle: Padding(
                             padding: const EdgeInsets.only(top:6),
                             child: Row(
@@ -497,6 +531,10 @@ jobs:
                                 const Text('|'),
                                 const SizedBox(width: 16),
                                 Text('Position: ${_fmt(p)}', softWrap: false),
+                                const SizedBox(width: 16),
+                                const Text('|'),
+                                const SizedBox(width: 16),
+                                Text('Impr: ${_fmt(im)}', softWrap: false), // NEW
                               ],
                             ),
                           ),
