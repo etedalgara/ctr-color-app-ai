@@ -60,7 +60,7 @@ jobs:
             uses-material-design: true
           YAML
 
-      - name: Write app source (main.dart)  # + fix tiny typo in _validateData()
+      - name: Write app source (main.dart)
         run: |
           mkdir -p app/lib
           cat > app/lib/main.dart << 'DART'
@@ -718,7 +718,7 @@ jobs:
                           TextButton.icon(onPressed: () async{
                             final bytes = Uint8List.fromList(utf8.encode(text));
                             await Share.shareXFiles([XFile.fromData(bytes, name:'page_analysis.txt', mimeType:'text/plain')], text:'AI analysis');
-                          }, icon: const Icon(Icons.ios_share), label: const Text('اشتراک')),\
+                          }, icon: const Icon(Icons.ios_share), label: const Text('اشتراک')),
                         ])
                       ]),
                     ),
@@ -895,7 +895,7 @@ jobs:
                             DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
                             DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
                           ],
-                          onChanged: (m){ if(m!=null){ setS(()=>{ }); } },
+                          onChanged: (m){ if(m!=null){ setS(()=> currentTheme=m); } },
                         ),
                       ]),
                       actions: [
@@ -938,21 +938,7 @@ jobs:
           grep -q 'android.permission.INTERNET' "$MANIFEST" || \
             sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <application|g' "$MANIFEST"
 
-      - name: Bump Kotlin plugin version
-        run: |
-          sed -i "s/id 'org.jetbrains.kotlin.android' version '[^']*'/id 'org.jetbrains.kotlin.android' version '1.8.22'/g" app/android/build.gradle
-
-      - name: Force kotlin stdlib versions
-        run: |
-          cat >> app/android/app/build.gradle <<'GRADLE'
-          configurations.all {
-            resolutionStrategy {
-              force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
-              force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22'
-              force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'
-            }
-          }
-          GRADLE
+      # نسخه‌های Kotlin/AGP را به پیش‌فرض Flutter می‌سپاریم (استپ اجباری حذف شد)
 
       - name: Setup Gradle (cache)
         uses: gradle/actions/setup-gradle@v3
@@ -985,11 +971,16 @@ jobs:
         run: |
           set -euo pipefail
           attempts=0
-          until flutter build apk --release -v; do
+          LOGFILE=build_apk_full.log
+          until flutter build apk --release -v 2>&1 | tee "$LOGFILE"; do
             attempts=$((attempts+1))
             if [ $attempts -ge 3 ]; then
               echo "Build failed after $attempts attempts."
-              echo "== Listing build dir =="
+              echo "== Last 300 lines of flutter/gradle log =="
+              tail -n 300 "$LOGFILE" || true
+              echo "== Any Gradle logs =="
+              find android -name "*.log" -print -exec tail -n 200 {} \; || true
+              echo "== Build dir tree =="
               ls -R build || true
               exit 1
             fi
