@@ -36,7 +36,7 @@ jobs:
           name: ctr_color_app
           description: CTR/Pos/Impr/Clicks with Opportunity Labels (fa) + per-page AI + Dark Mode
           publish_to: "none"
-          version: 2.1.1+23
+          version: 2.1.0+22
 
           environment:
             sdk: ">=3.3.0 <4.0.0"
@@ -112,7 +112,7 @@ jobs:
             ResultRow(this.row,this.colorClass,this.bm,this.oppLabel);
           }
 
-          // ===================== App with ThemeMode + Toggle Button =====================
+          // ===================== App with ThemeMode =====================
           class CTRColorApp extends StatefulWidget {
             const CTRColorApp({super.key});
             @override State<CTRColorApp> createState()=>_CTRColorAppState();
@@ -135,10 +135,6 @@ jobs:
               final raw = m==ThemeMode.dark?'dark': m==ThemeMode.light?'light':'system';
               await sp.setString(_kPrefsTheme, raw);
               setState(()=>_themeMode=m);
-            }
-            void _toggleTheme(){
-              final next = _themeMode==ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
-              _saveTheme(next);
             }
 
             ThemeData _lightTheme(){
@@ -207,11 +203,7 @@ jobs:
                 theme: _lightTheme(),
                 darkTheme: _darkTheme(),
                 themeMode: _themeMode,
-                home: HomeScreen(
-                  onChangeTheme: _saveTheme,
-                  currentTheme: _themeMode,
-                  onToggleTheme: _toggleTheme,
-                ),
+                home: HomeScreen(onChangeTheme: _saveTheme, currentTheme: _themeMode),
                 locale: const Locale('fa'),
               );
             }
@@ -221,8 +213,7 @@ jobs:
           class HomeScreen extends StatefulWidget {
             final void Function(ThemeMode) onChangeTheme;
             final ThemeMode currentTheme;
-            final VoidCallback onToggleTheme;
-            const HomeScreen({super.key, required this.onChangeTheme, required this.currentTheme, required this.onToggleTheme});
+            const HomeScreen({super.key, required this.onChangeTheme, required this.currentTheme});
             @override State<HomeScreen> createState()=>_HomeScreenState();
           }
 
@@ -346,7 +337,7 @@ jobs:
               }
               if (badCtr > 0) issues.add('Invalid CTR in $badCtr row(s).');
               if (badPos > 0) issues.add('Invalid Position in $badPos row(s).');
-              if (badImp > 0) issues.add('Invalid Impressions in $badImp row(s).');
+              if (badImp > 0) issues add('Invalid Impressions in $badImp row(s).');
               if (badClk > 0) issues.add('Invalid Clicks in $badClk row(s).');
               if (_benchmarks.isEmpty) issues.add('Benchmarks are missing. Add a "Benchmarks" sheet.');
               return issues;
@@ -445,7 +436,7 @@ jobs:
               }
             }
 
-            // -------- KPI chip (خوانا)
+            // -------- KPI chip (خوانا در لایت/دارک)
             Widget _kpiChip(BuildContext context, String label, String value) {
               final cs = Theme.of(context).colorScheme;
               final isDark = Theme.of(context).brightness==Brightness.dark;
@@ -459,7 +450,7 @@ jobs:
               );
             }
 
-            // -------- Page card (path متن خوانا در لایت/دارک)
+            // -------- Page card
             Widget _pageCard(ResultRow r){
               final uri = Uri.tryParse(r.row.text);
               final host = uri?.host.isNotEmpty == true ? uri!.host : r.row.text;
@@ -469,8 +460,6 @@ jobs:
               final im = _num(r.row.impRaw);
               final ck = _num(r.row.clkRaw);
               final bg = _bandColor(r.colorClass);
-              final isDark = Theme.of(context).brightness==Brightness.dark;
-              final pathColor = isDark ? Colors.white.withOpacity(0.85) : Colors.black87; // <-- خوانایی
 
               return Container(
                 decoration: BoxDecoration(
@@ -491,7 +480,7 @@ jobs:
                       TextSpan(children: [
                         TextSpan(text: host, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
                         if (path.isNotEmpty) const TextSpan(text: '  '),
-                        if (path.isNotEmpty) TextSpan(text: path, style: TextStyle(color: pathColor)),
+                        if (path.isNotEmpty) TextSpan(text: path, style: TextStyle(color: Colors.white.withOpacity(0.85))),
                       ]),
                       textDirection: TextDirection.ltr,
                     ),
@@ -612,10 +601,10 @@ jobs:
               setState(()=>_results=out);
             }
 
-            // -------- Filter chips (بدون تغییر اندازه در حالت انتخاب)
-            Color _bandChipBase(ColorClass? band){
+            // -------- Filter chips with band colors
+            Color _bandChipColor(ColorClass? band){
               switch(band){
-                case null: return Colors.blueGrey.shade400;
+                case null: return Colors.blueGrey.shade400; // All
                 case ColorClass.redStrong: return Colors.red.shade400;
                 case ColorClass.redLight: return Colors.pink.shade300;
                 case ColorClass.gray: return Colors.grey.shade500;
@@ -624,15 +613,16 @@ jobs:
                 case ColorClass.warn: return Colors.orange.shade500;
               }
             }
+
             Widget _filtersGrid(BuildContext context, List<MapEntry<String, ColorClass?>> items){
               return Wrap(
                 spacing: 8, runSpacing: 8,
                 children: items.map((e){
                   final band = e.value;
                   final selected = band==null ? _filterBands.isEmpty : _filterBands.contains(band);
-                  final baseColor = _bandChipBase(band);
-                  return FilterChip(
-                    label: Text(e.key),
+                  final baseColor = _bandChipColor(band);
+                  return ChoiceChip(
+                    label: Text(e.key, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
                     selected: selected,
                     onSelected: (_){
                       setState(() {
@@ -643,16 +633,8 @@ jobs:
                         }
                       });
                     },
-                    showCheckmark: false,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    labelStyle: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-                    selectedLabelStyle: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
-                    backgroundColor: baseColor.withOpacity(0.6),
                     selectedColor: baseColor,
-                    side: BorderSide(color: baseColor.withOpacity(0.0)),
-                    shape: const StadiumBorder(),
+                    backgroundColor: baseColor.withOpacity(0.6),
                   );
                 }).toList(),
               );
@@ -728,10 +710,7 @@ jobs:
                     builder: (_,ctrl)=>Container(
                       padding: const EdgeInsets.fromLTRB(16,12,16,16),
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Row(children:[
-                          Expanded(child: Text(title, style: Theme.of(context).textTheme.titleLarge)),
-                          IconButton(onPressed: ()=>Navigator.pop(context), icon: const Icon(Icons.close))
-                        ]),
+                        Row(children:[Expanded(child: Text(title, style: Theme.of(context).textTheme.titleLarge)), IconButton(onPressed: ()=>Navigator.pop(context), icon: const Icon(Icons.close))]),
                         const Divider(),
                         Expanded(child: SingleChildScrollView(controller: ctrl, child: SelectableText(text, textAlign: TextAlign.justify))),
                         const SizedBox(height:8),
@@ -799,14 +778,7 @@ jobs:
               return Scaffold(
                 appBar: AppBar(
                   title: const Text('CTR Color App'),
-                  actions: [
-                    IconButton(
-                      tooltip: 'Toggle Dark/Light',
-                      onPressed: widget.onToggleTheme,
-                      icon: Icon(Theme.of(context).brightness==Brightness.dark ? Icons.light_mode_outlined : Icons.dark_mode_outlined),
-                    ),
-                    IconButton(onPressed:_openSettings, icon: const Icon(Icons.settings)),
-                  ],
+                  actions: [ IconButton(onPressed:_openSettings, icon: const Icon(Icons.settings)) ],
                 ),
                 body: Padding(
                   padding: const EdgeInsets.all(12),
@@ -878,7 +850,7 @@ jobs:
               );
             }
 
-            // -------- Settings dialog (بدون بخش Theme)
+            // -------- Settings dialog (includes Theme)
             void _openSettings(){
               final ctrl = TextEditingController(text: _customAiUrl ?? '');
               showDialog(context: context, builder: (_){
@@ -886,6 +858,10 @@ jobs:
                   builder: (ctx, setS) {
                     final wRank = _rankBias;
                     final wCTR = 1.0 - _rankBias;
+                    ThemeMode currentTheme = (context.findAncestorWidgetOfExactType<CTRColorApp>() as CTRColorApp?) == null
+                      ? ThemeMode.system
+                      : (widget.currentTheme);
+
                     return AlertDialog(
                       title: const Text('تنظیمات'),
                       content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -906,6 +882,21 @@ jobs:
                           onChanged: (v)=> setS(()=>_rankBias=v),
                         ),
                         Row(children:[const Text('Rank Growth'), const Spacer(), Text('${(wRank*100).toStringAsFixed(0)}%')]),
+                        const SizedBox(height:12),
+                        const Divider(),
+                        const SizedBox(height:8),
+                        const Text('ظاهر (Appearance):'),
+                        const SizedBox(height:8),
+                        DropdownButton<ThemeMode>(
+                          value: currentTheme,
+                          isExpanded: true,
+                          items: const [
+                            DropdownMenuItem(value: ThemeMode.system, child: Text('System Default')),
+                            DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
+                            DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
+                          ],
+                          onChanged: (m){ if(m!=null){ setS((){ currentTheme=m; }); } },
+                        ),
                       ]),
                       actions: [
                         TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('Cancel')),
@@ -916,6 +907,7 @@ jobs:
                           else { await sp.setString(_kPrefsAiUrl, v); setState(()=>_customAiUrl=v); }
                           await sp.setDouble(_kPrefsTol, _tolerance);
                           await sp.setDouble(_kPrefsBalance, _rankBias);
+                          widget.onChangeTheme(currentTheme);
                           if(mounted) setState((){});
                           Navigator.pop(context);
                         }, child: const Text('Save'))
@@ -940,33 +932,27 @@ jobs:
           sed -i "s|__AI_PROXY_URL__|$URL_ESC|g" app/lib/main.dart
           echo "Injected URL: ${URL:-<empty>}"
 
-      # --- Android config fixes (minSdk/compile/target + INTERNET permission) ---
-      - name: Configure Android SDK versions
-        working-directory: app/android
-        run: |
-          set -euo pipefail
-          APP_GRADLE=app/build.gradle
-          sed -i 's/minSdkVersion[[:space:]]\+flutter\.minSdkVersion/minSdkVersion 23/g' "$APP_GRADLE" || true
-          sed -i 's/compileSdkVersion[[:space:]]\+flutter\.compileSdkVersion/compileSdkVersion 34/g' "$APP_GRADLE" || true
-          sed -i 's/targetSdkVersion[[:space:]]\+flutter\.targetSdkVersion/targetSdkVersion 34/g' "$APP_GRADLE" || true
-          sed -i 's/minSdkVersion[[:space:]]\+[0-9][0-9]*/minSdkVersion 23/g' "$APP_GRADLE" || true
-          sed -i 's/compileSdkVersion[[:space:]]\+[0-9][0-9]*/compileSdkVersion 34/g' "$APP_GRADLE" || true
-          sed -i 's/targetSdkVersion[[:space:]]\+[0-9][0-9]*/targetSdkVersion 34/g' "$APP_GRADLE" || true
-
       - name: Ensure INTERNET permission
         run: |
-          set -euo pipefail
           MANIFEST=app/android/app/src/main/AndroidManifest.xml
-          if ! grep -q 'android.permission.INTERNET' "$MANIFEST"; then
-            awk '
-              BEGIN{inserted=0}
-              /<manifest[^>]*>/ && inserted==0 {
-                print $0 RS "    <uses-permission android:name=\"android.permission.INTERNET\"/>"
-                inserted=1; next
-              }
-              {print}
-            ' "$MANIFEST" > "$MANIFEST.tmp" && mv "$MANIFEST.tmp" "$MANIFEST"
-          fi
+          grep -q 'android.permission.INTERNET' "$MANIFEST" || \
+            sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <application|g' "$MANIFEST"
+
+      - name: Bump Kotlin plugin version
+        run: |
+          sed -i "s/id 'org.jetbrains.kotlin.android' version '[^']*'/id 'org.jetbrains.kotlin.android' version '1.8.22'/g" app/android/build.gradle
+
+      - name: Force kotlin stdlib versions
+        run: |
+          cat >> app/android/app/build.gradle <<'GRADLE'
+          configurations.all {
+            resolutionStrategy {
+              force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
+              force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22'
+              force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'
+            }
+          }
+          GRADLE
 
       - name: Setup Gradle (cache)
         uses: gradle/actions/setup-gradle@v3
@@ -975,53 +961,24 @@ jobs:
 
       - name: Gradle warmup (retry)
         working-directory: app/android
-        shell: bash
         run: |
-          set -euo pipefail
-          attempts=0
-          until ./gradlew --no-daemon help; do
-            attempts=$((attempts+1))
-            if [ $attempts -ge 3 ]; then
-              echo "Gradle warmup failed after $attempts attempts."
-              exit 1
-            fi
-            echo "Retrying Gradle warmup in 20s ($attempts/3)..."
-            sleep 20
+          for i in 1 2 3; do
+            ./gradlew --no-daemon help && break || sleep 20
           done
 
       - name: Flutter pub get
         working-directory: app
         run: flutter pub get
 
-      - name: Build APK (release) with retry (fail if all attempts fail)
+      - name: Build APK (release) with retry
         working-directory: app
-        shell: bash
         run: |
-          set -euo pipefail
-          attempts=0
-          LOGFILE=build_apk_full.log
-          until flutter build apk --release -v 2>&1 | tee "$LOGFILE"; do
-            attempts=$((attempts+1))
-            if [ $attempts -ge 3 ]; then
-              echo "Build failed after $attempts attempts."
-              echo "== Last 300 lines of flutter/gradle log =="
-              tail -n 300 "$LOGFILE" || true
-              echo "== Build dir tree =="
-              ls -R build || true
-              exit 1
-            fi
-            echo "Retrying build in 20s ($attempts/3)..."
-            sleep 20
+          for i in 1 2 3; do
+            flutter build apk --release && break || sleep 20
           done
-          echo "== Build outputs (tree) =="
-          ls -R build || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-apks
-          path: |
-            app/build/**/outputs/flutter-apk/*release*.apk
-            app/build/**/outputs/apk/release/*release*.apk
-          if-no-files-found: error
-          retention-days: 7
+          name: app-release.apk
+          path: app/build/outputs/flutter-apk/app-release.apk
