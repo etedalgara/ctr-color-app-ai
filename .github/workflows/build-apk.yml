@@ -1,4 +1,4 @@
-name: Build Android APK (raw CTR + 5 bands + per-page AI)
+name: Build Android APK (CTR+Pos+Impr+Clicks with Opportunity Labels + AI)
 
 on:
   push:
@@ -34,9 +34,9 @@ jobs:
         run: |
           cat > app/pubspec.yaml << 'YAML'
           name: ctr_color_app
-          description: CTR colorizer (raw numbers, 5 bands by tolerance) + per-page AI (fa)
+          description: CTR/Pos/Impr/Clicks with Opportunity Labels (fa) + per-page AI
           publish_to: "none"
-          version: 1.5.5+16
+          version: 1.7.0+18
 
           environment:
             sdk: ">=3.3.0 <4.0.0"
@@ -65,6 +65,7 @@ jobs:
           mkdir -p app/lib
           cat > app/lib/main.dart << 'DART'
           import 'dart:convert';
+          import 'dart:math' as math;
           import 'dart:typed_data';
           import 'package:collection/collection.dart';
           import 'package:excel/excel.dart' as xls;
@@ -86,20 +87,29 @@ jobs:
             final String text;
             final String ctrRaw;
             final String posRaw;
-            final String impRaw; // NEW
+            final String impRaw;
+            final String clkRaw;
             final int rowIndex;
             PageRow({
               required this.text,
               required this.ctrRaw,
               required this.posRaw,
-              required this.impRaw, // NEW
+              required this.impRaw,
+              required this.clkRaw,
               required this.rowIndex,
             });
           }
+
           class Benchmark { final double fromPos,toPos,minCTR,maxCTR; Benchmark(this.fromPos,this.toPos,this.minCTR,this.maxCTR); }
 
           enum ColorClass { redStrong, redLight, gray, greenLight, greenStrong, warn }
-          class ResultRow { final PageRow row; final ColorClass colorClass; final Benchmark? bm; ResultRow(this.row,this.colorClass,this.bm); }
+          class ResultRow {
+            final PageRow row;
+            final ColorClass colorClass;
+            final Benchmark? bm;
+            final String oppLabel; // متن Opportunity
+            ResultRow(this.row,this.colorClass,this.bm,this.oppLabel);
+          }
 
           class CTRColorApp extends StatelessWidget {
             const CTRColorApp({super.key});
@@ -117,7 +127,7 @@ jobs:
           class HomeScreen extends StatefulWidget { const HomeScreen({super.key}); @override State<HomeScreen> createState()=>_HomeScreenState(); }
           class _HomeScreenState extends State<HomeScreen>{
             xls.Excel? _excel; String? _dataSheetName; List<String> _headers=[]; List<List<String>> _table=[];
-            int? _colText,_colCTR,_colPos,_colImp; // NEW: _colImp
+            int? _colText,_colCTR,_colPos,_colImp,_colClk;
             List<Benchmark> _benchmarks=[]; bool _bmFromSheet=false; List<ResultRow> _results=[];
             String? _bmSheetName;
             static const _kPrefsTol='tolerance';
@@ -142,7 +152,7 @@ jobs:
 
             Future<void> _pickExcel() async{
               try{
-                setState(()=>{_excel=null,_headers=[],_table=[],_colText=null,_colCTR=null,_colPos=null,_colImp=null,_benchmarks=[],_bmFromSheet=false,_results=[],_bmSheetName=null});
+                setState(()=>{_excel=null,_headers=[],_table=[],_colText=null,_colCTR=null,_colPos=null,_colImp=null,_colClk=null,_benchmarks=[],_bmFromSheet=false,_results=[],_bmSheetName=null});
                 final res=await FilePicker.platform.pickFiles(type:FileType.custom,allowedExtensions:['xlsx'],withData:true);
                 if(res==null||res.files.isEmpty) return;
                 final bytes=res.files.single.bytes; if(bytes==null){ _snack('Failed to read file bytes'); return; }
@@ -187,48 +197,46 @@ jobs:
             }
 
             void _autoMap(){
-              int? find(List<String> keys){ for(var i=0;i<_headers.length;i++){ final h=_headers[i].toLowerCase(); for(final k in keys){ if(h.contains(k)) return i; } } return null; }
+              int? find(List<String> keys){
+                for(var i=0;i<_headers.length;i++){
+                  final h=_headers[i].toLowerCase();
+                  for(final k in keys){ if(h.contains(k)) return i; }
+                }
+                return null;
+              }
               _colText = find(['url','address','page','landing','slug','title']) ?? 0;
               _colCTR  = find(['ctr','click-through','clickthrough']) ?? (_headers.length>1?1:null);
               _colPos  = find(['position','avg position','rank']) ?? (_headers.length>2?2:null);
-              // NEW: impressions
               _colImp  = find(['impr','impression','impressions','imps','نمایش','ایمپرشن']);
+              _colClk  = find(['click','clicks','کلیک']);
               setState((){});
             }
 
             List<String> _validateData() {
               final issues = <String>[];
               if (_headers.isEmpty) issues.add('No data sheet loaded.');
-              if (_colText == null || _colCTR == null || _colPos == null || _colImp == null) {
-                issues.add('Please map all four columns (Text/CTR/Position/Impressions).');
+              if (_colText == null || _colCTR == null || _colPos == null || _colImp == null || _colClk == null) {
+                issues.add('Please map all five columns (Text/CTR/Position/Impressions/Clicks).');
                 return issues;
               }
-              var badCtr = 0, badPos = 0, badImp = 0;
+              var badCtr = 0, badPos = 0, badImp = 0, badClk = 0;
               for (var i = 0; i < _table.length; i++) {
                 final row = _table[i];
                 final t = _colText! < row.length ? row[_colText!] : '';
                 final c = _colCTR!  < row.length ? row[_colCTR!]  : '';
                 final p = _colPos!  < row.length ? row[_colPos!]  : '';
                 final im = _colImp! < row.length ? row[_colImp!]  : '';
-                final ctr = _ctr(c), pos = _num(p), imp = _num(im);
+                final ck = _colClk! < row.length ? row[_colClk!]  : '';
+                final ctr = _ctr(c), pos = _num(p), imp = _num(im), clk = _num(ck);
                 if (t.trim().isEmpty) issues.add('Row ${i+2}: empty Text/URL');
-                if (ctr.isNaN) badCtr++; if (pos.isNaN) badPos++; if (imp.isNaN) badImp++;
+                if (ctr.isNaN) badCtr++; if (pos.isNaN) badPos++; if (imp.isNaN) badImp++; if (clk.isNaN) badClk++;
               }
               if (badCtr > 0) issues.add('Invalid CTR in $badCtr row(s).');
               if (badPos > 0) issues.add('Invalid Position in $badPos row(s).');
               if (badImp > 0) issues.add('Invalid Impressions in $badImp row(s).');
+              if (badClk > 0) issues.add('Invalid Clicks in $badClk row(s).');
               if (_benchmarks.isEmpty) issues.add('Benchmarks are missing. Add a "Benchmarks" sheet.');
               return issues;
-            }
-
-            void _showIssues(List<String> issues){
-              showDialog(context: context, builder: (_){
-                return Directionality(textDirection: TextDirection.rtl, child: AlertDialog(
-                  title: const Text('ایرادهای داده'),
-                  content: SizedBox(width:480,child: SingleChildScrollView(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: issues.map((e)=>Text('• $e')).toList(),))),
-                  actions:[TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('باشه'))],
-                ));
-              });
             }
 
             ColorClass _classify(double ctr, Benchmark bm){
@@ -242,21 +250,128 @@ jobs:
               return ColorClass.greenStrong;
             }
 
+            double _posAdv(double pos) => (pos <= 10) ? (10 - pos) / 9.0 : 0.0;
+
+            double _oppScore(double ctr, Benchmark bm, double impr, double clicks){
+              final ctrBench = (bm.minCTR + bm.maxCTR) / 2.0;
+              final gap = (ctrBench - ctr);
+              if (gap <= 0) return 0.0;
+              final base = gap * math.log(1 + math.max(0, impr));
+              final withClicks = base * math.log(1 + math.max(0, clicks));
+              return withClicks;
+            }
+
+            String _oppLabel({
+              required double score,
+              required double posAdv,
+              required double p60,
+              required double p80,
+              required bool hasBenchmark,
+              required bool gapPositive,
+            }){
+              if(!hasBenchmark) return 'Needs Benchmark';
+              if(!gapPositive) return 'Protect Top';
+              // سطوح کیفی بر اساس صدک‌ها
+              if (score >= p80) return posAdv >= 0.6 ? 'Quick Win' : 'High Opportunity';
+              if (score >= p60) return 'Moderate Growth';
+              return 'Low Potential';
+            }
+
+            // محاسبه‌ی صدک ساده (linear interpolation)
+            double _percentile(List<double> data, double p){
+              if (data.isEmpty) return 0.0;
+              final list = [...data]..sort();
+              final pos = (p/100.0) * (list.length - 1);
+              final lo = pos.floor();
+              final hi = pos.ceil();
+              if (lo==hi) return list[lo];
+              final frac = pos - lo;
+              return list[lo] + (list[hi]-list[lo]) * frac;
+            }
+
             void _compute(){
               final issues = _validateData();
               if (issues.isNotEmpty){ _showIssues(issues); return; }
-              final out=<ResultRow>[];
+
+              // پاس اول: محاسبه‌ی امتیاز Opportunity خام برای صدک‌ها
+              final tempScores = <double>[];
+              final tempRows = <Map<String,dynamic>>[];
+
               for(var i=0;i<_table.length;i++){
                 final row=_table[i];
-                if(_colText!>=row.length||_colCTR!>=row.length||_colPos!>=row.length||_colImp!>=row.length) continue;
-                final text=row[_colText!], cRaw=row[_colCTR!], pRaw=row[_colPos!], iRaw=row[_colImp!];
-                final c=_ctr(cRaw), p=_num(pRaw);
-                if(c.isNaN||p.isNaN){ out.add(ResultRow(PageRow(text:text,ctrRaw:cRaw,posRaw:pRaw,impRaw:iRaw,rowIndex:i+1),ColorClass.warn,null)); continue; }
-                final bm=_benchmarks.firstWhereOrNull((b)=>p>=b.fromPos&&p<=b.toPos);
-                if(bm==null){ out.add(ResultRow(PageRow(text:text,ctrRaw:cRaw,posRaw:pRaw,impRaw:iRaw,rowIndex:i+1),ColorClass.warn,null)); continue; }
-                out.add(ResultRow(PageRow(text:text,ctrRaw:cRaw,posRaw:pRaw,impRaw:iRaw,rowIndex:i+1),_classify(c,bm),bm));
+                if(_colText!>=row.length||_colCTR!>=row.length||_colPos!>=row.length||_colImp!>=row.length||_colClk!>=row.length) continue;
+                final text=row[_colText!], cRaw=row[_colCTR!], pRaw=row[_colPos!], iRaw=row[_colImp!], kRaw=row[_colClk!];
+                final ctr=_ctr(cRaw), pos=_num(pRaw), impr=_num(iRaw), clk=_num(kRaw);
+
+                Benchmark? bm;
+                if(!ctr.isNaN && !pos.isNaN){
+                  bm=_benchmarks.firstWhereOrNull((b)=>pos>=b.fromPos&&pos<=b.toPos);
+                }
+
+                double score=0.0;
+                bool gapPositive=false;
+                if(bm!=null && !ctr.isNaN && !pos.isNaN && !impr.isNaN && !clk.isNaN){
+                  final benchMid=(bm.minCTR+bm.maxCTR)/2.0;
+                  gapPositive = (benchMid - ctr) > 0;
+                  score=_oppScore(ctr,bm,impr,clk);
+                }
+                tempRows.add({
+                  'text':text,'cRaw':cRaw,'pRaw':pRaw,'iRaw':iRaw,'kRaw':kRaw,
+                  'ctr':ctr,'pos':pos,'impr':impr,'clk':clk,'bm':bm,'score':score,'gapPositive':gapPositive,
+                });
+                if(score>0) tempScores.add(score);
               }
+
+              final p60 = _percentile(tempScores, 60);
+              final p80 = _percentile(tempScores, 80);
+
+              // پاس دوم: ساخت ResultRow با برچسب Opportunity
+              final out=<ResultRow>[];
+              for(final m in tempRows){
+                final bm = m['bm'] as Benchmark?;
+                final ctr = m['ctr'] as double;
+                final pos = m['pos'] as double;
+                final impr= m['impr'] as double;
+                final clk = m['clk'] as double;
+                final score = m['score'] as double;
+                final gapPositive = m['gapPositive'] as bool;
+
+                ColorClass band;
+                String label;
+
+                if(bm==null || ctr.isNaN || pos.isNaN){
+                  band = ColorClass.warn;
+                  label = 'Needs Benchmark';
+                }else{
+                  band = _classify(ctr,bm);
+                  label = _oppLabel(
+                    score: score,
+                    posAdv: _posAdv(pos),
+                    p60: p60, p80: p80,
+                    hasBenchmark: true,
+                    gapPositive: gapPositive,
+                  );
+                }
+
+                out.add(ResultRow(
+                  PageRow(
+                    text: m['text'], ctrRaw: m['cRaw'], posRaw: m['pRaw'], impRaw: m['iRaw'], clkRaw: m['kRaw'], rowIndex:  m['rowIndex']??0
+                  ),
+                  band, bm, label
+                ));
+              }
+
               setState(()=>_results=out);
+            }
+
+            void _showIssues(List<String> issues){
+              showDialog(context: context, builder: (_){
+                return Directionality(textDirection: TextDirection.rtl, child: AlertDialog(
+                  title: const Text('ایرادهای داده'),
+                  content: SizedBox(width:520,child: SingleChildScrollView(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: issues.map((e)=>Text('• $e')).toList(),))),
+                  actions:[TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('باشه'))],
+                ));
+              });
             }
 
             Future<void> _analyzeOne(ResultRow r) async {
@@ -282,11 +397,14 @@ jobs:
                   "url": r.row.text,
                   "posRaw": r.row.posRaw,
                   "ctrRaw": r.row.ctrRaw,
-                  "imprRaw": r.row.impRaw,          // NEW
+                  "imprRaw": r.row.impRaw,
+                  "clicksRaw": r.row.clkRaw,
                   "pos": p,
                   "ctr": c,
-                  "impr": _num(r.row.impRaw),       // NEW
-                  "band": band
+                  "impr": _num(r.row.impRaw),
+                  "clicks": _num(r.row.clkRaw),
+                  "band": band,
+                  "opportunityLabel": r.oppLabel
                 }
               };
 
@@ -297,7 +415,7 @@ jobs:
                 if(res.statusCode==200){
                   final raw = jsonDecode(res.body);
                   final text = (raw is Map && raw["summaryText"] is String) ? raw["summaryText"] as String : '';
-                  Navigator.of(context).pop();
+                  if(mounted) Navigator.of(context).pop();
                   _showAiSheet(title:'تحلیل صفحه', text:text.isEmpty?'—':text);
                   return;
                 }else{ lastErr='AI HTTP ${res.statusCode}: ${res.body}'; }
@@ -332,6 +450,17 @@ jobs:
             }
 
             void _snack(String m)=>ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+
+            Color _bandColor(ColorClass c){
+              switch(c){
+                case ColorClass.redStrong:   return Colors.red.shade200;
+                case ColorClass.redLight:    return Colors.red.shade100;
+                case ColorClass.gray:        return Colors.grey.shade300;
+                case ColorClass.greenLight:  return const Color(0xFFB7E4C7);
+                case ColorClass.greenStrong: return const Color(0xFF9BE7C4);
+                case ColorClass.warn:        return const Color(0xFFFFEBA0);
+              }
+            }
 
             Color _btnColor(ColorClass? band, bool selected){
               switch(band){
@@ -401,29 +530,21 @@ jobs:
               list.sort((a,b){
                 final ca=_ctr(a.row.ctrRaw), cb=_ctr(b.row.ctrRaw);
                 final pa=_num(a.row.posRaw), pb=_num(b.row.posRaw);
-                final ia=_num(a.row.impRaw), ib=_num(b.row.impRaw); // NEW
+                final ia=_num(a.row.impRaw), ib=_num(b.row.impRaw);
+                final ka=_num(a.row.clkRaw), kb=_num(b.row.clkRaw);
                 switch(_sort){
                   case 'posAsc':  return pa.compareTo(pb);
                   case 'posDesc': return pb.compareTo(pa);
                   case 'ctrAsc':  return ca.compareTo(cb);
                   case 'ctrDesc': return cb.compareTo(ca);
-                  case 'impAsc':  return ia.compareTo(ib); // NEW
-                  case 'impDesc': return ib.compareTo(ia); // NEW
+                  case 'impAsc':  return ia.compareTo(ib);
+                  case 'impDesc': return ib.compareTo(ia);
+                  case 'clkAsc':  return ka.compareTo(kb);
+                  case 'clkDesc': return kb.compareTo(ka);
                 }
                 return 0;
               });
               return list;
-            }
-
-            Color _bandColor(ColorClass c){
-              switch(c){
-                case ColorClass.redStrong:   return Colors.red.shade200;
-                case ColorClass.redLight:    return Colors.red.shade100;
-                case ColorClass.gray:        return Colors.grey.shade300;
-                case ColorClass.greenLight:  return const Color(0xFFB7E4C7);
-                case ColorClass.greenStrong: return const Color(0xFF9BE7C4);
-                case ColorClass.warn:        return const Color(0xFFFFEBA0);
-              }
             }
 
             @override Widget build(BuildContext context){
@@ -472,8 +593,10 @@ jobs:
                           DropdownMenuItem(value:'posDesc', child: Text('Pos ↓')),
                           DropdownMenuItem(value:'ctrAsc',  child: Text('CTR ↑')),
                           DropdownMenuItem(value:'ctrDesc', child: Text('CTR ↓')),
-                          DropdownMenuItem(value:'impAsc',  child: Text('Impr ↑')), // NEW
-                          DropdownMenuItem(value:'impDesc', child: Text('Impr ↓')), // NEW
+                          DropdownMenuItem(value:'impAsc',  child: Text('Impr ↑')),
+                          DropdownMenuItem(value:'impDesc', child: Text('Impr ↓')),
+                          DropdownMenuItem(value:'clkAsc',  child: Text('Clicks ↑')),
+                          DropdownMenuItem(value:'clkDesc', child: Text('Clicks ↓')),
                         ],
                         onChanged:(v)=>setState(()=>_sort=v??'posAsc'),
                       ),
@@ -518,23 +641,33 @@ jobs:
                       itemBuilder:(ctx,i){
                         final r=_visible[i];
                         final bg=_bandColor(r.colorClass);
-                        final c=_ctr(r.row.ctrRaw), p=_num(r.row.posRaw), im=_num(r.row.impRaw); // NEW
+                        final c=_ctr(r.row.ctrRaw), p=_num(r.row.posRaw), im=_num(r.row.impRaw), ck=_num(r.row.clkRaw);
                         return Card(color:bg, child: ListTile(
                           title: Text(r.row.text, softWrap:true),
                           subtitle: Padding(
                             padding: const EdgeInsets.only(top:6),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.start,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('CTR: ${_fmt(c)}', softWrap: false),
-                                const SizedBox(width: 16),
-                                const Text('|'),
-                                const SizedBox(width: 16),
-                                Text('Position: ${_fmt(p)}', softWrap: false),
-                                const SizedBox(width: 16),
-                                const Text('|'),
-                                const SizedBox(width: 16),
-                                Text('Impr: ${_fmt(im)}', softWrap: false), // NEW
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.start,
+                                  children: [
+                                    Text('CTR: ${_fmt(c)}', softWrap: false),
+                                    const SizedBox(width: 16), const Text('|'), const SizedBox(width: 16),
+                                    Text('Position: ${_fmt(p)}', softWrap: false),
+                                  ],
+                                ),
+                                const SizedBox(height:4),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.start,
+                                  children: [
+                                    Text('Impr: ${_fmt(im)}', softWrap: false),
+                                    const SizedBox(width: 16), const Text('|'), const SizedBox(width: 16),
+                                    Text('Clicks: ${_fmt(ck)}', softWrap: false),
+                                    const SizedBox(width: 16), const Text('|'), const SizedBox(width: 16),
+                                    Text('Opportunity: ${r.oppLabel}', softWrap: false),
+                                  ],
+                                ),
                               ],
                             ),
                           ),
