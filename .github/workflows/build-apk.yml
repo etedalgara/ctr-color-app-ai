@@ -60,7 +60,7 @@ jobs:
             uses-material-design: true
           YAML
 
-      - name: Write app source (main.dart)
+      - name: Write app source (main.dart)  # + fix tiny typo in _validateData()
         run: |
           mkdir -p app/lib
           cat > app/lib/main.dart << 'DART'
@@ -337,7 +337,7 @@ jobs:
               }
               if (badCtr > 0) issues.add('Invalid CTR in $badCtr row(s).');
               if (badPos > 0) issues.add('Invalid Position in $badPos row(s).');
-              if (badImp > 0) issues add('Invalid Impressions in $badImp row(s).');
+              if (badImp > 0) issues.add('Invalid Impressions in $badImp row(s).');
               if (badClk > 0) issues.add('Invalid Clicks in $badClk row(s).');
               if (_benchmarks.isEmpty) issues.add('Benchmarks are missing. Add a "Benchmarks" sheet.');
               return issues;
@@ -436,7 +436,7 @@ jobs:
               }
             }
 
-            // -------- KPI chip (خوانا در لایت/دارک)
+            // -------- KPI chip
             Widget _kpiChip(BuildContext context, String label, String value) {
               final cs = Theme.of(context).colorScheme;
               final isDark = Theme.of(context).brightness==Brightness.dark;
@@ -718,7 +718,7 @@ jobs:
                           TextButton.icon(onPressed: () async{
                             final bytes = Uint8List.fromList(utf8.encode(text));
                             await Share.shareXFiles([XFile.fromData(bytes, name:'page_analysis.txt', mimeType:'text/plain')], text:'AI analysis');
-                          }, icon: const Icon(Icons.ios_share), label: const Text('اشتراک')),
+                          }, icon: const Icon(Icons.ios_share), label: const Text('اشتراک')),\
                         ])
                       ]),
                     ),
@@ -895,7 +895,7 @@ jobs:
                             DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
                             DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
                           ],
-                          onChanged: (m){ if(m!=null){ setS((){ currentTheme=m; }); } },
+                          onChanged: (m){ if(m!=null){ setS(()=>{ }); } },
                         ),
                       ]),
                       actions: [
@@ -961,24 +961,50 @@ jobs:
 
       - name: Gradle warmup (retry)
         working-directory: app/android
+        shell: bash
         run: |
-          for i in 1 2 3; do
-            ./gradlew --no-daemon help && break || sleep 20
+          set -euo pipefail
+          attempts=0
+          until ./gradlew --no-daemon help; do
+            attempts=$((attempts+1))
+            if [ $attempts -ge 3 ]; then
+              echo "Gradle warmup failed after $attempts attempts."
+              exit 1
+            fi
+            echo "Retrying Gradle warmup in 20s ($attempts/3)..."
+            sleep 20
           done
 
       - name: Flutter pub get
         working-directory: app
         run: flutter pub get
 
-      - name: Build APK (release) with retry
+      - name: Build APK (release) with retry (fail if all attempts fail)
         working-directory: app
+        shell: bash
         run: |
-          for i in 1 2 3; do
-            flutter build apk --release && break || sleep 20
+          set -euo pipefail
+          attempts=0
+          until flutter build apk --release -v; do
+            attempts=$((attempts+1))
+            if [ $attempts -ge 3 ]; then
+              echo "Build failed after $attempts attempts."
+              echo "== Listing build dir =="
+              ls -R build || true
+              exit 1
+            fi
+            echo "Retrying build in 20s ($attempts/3)..."
+            sleep 20
           done
+          echo "== Build outputs (tree) =="
+          ls -R build || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-release.apk
-          path: app/build/app/outputs/flutter-apk/app-release.apk
+          name: app-release-apks
+          path: |
+            app/build/**/outputs/flutter-apk/*release*.apk
+            app/build/**/outputs/apk/release/*release*.apk
+          if-no-files-found: error
+          retention-days: 7
