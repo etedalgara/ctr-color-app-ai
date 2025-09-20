@@ -36,7 +36,7 @@ jobs:
           name: ctr_color_app
           description: CTR/Pos/Impr/Clicks with Opportunity Labels (fa) + per-page AI
           publish_to: "none"
-          version: 1.9.0+20
+          version: 2.0.0+21
 
           environment:
             sdk: ">=3.3.0 <4.0.0"
@@ -65,7 +65,6 @@ jobs:
           mkdir -p app/lib
           cat > app/lib/main.dart << 'DART'
           import 'dart:convert';
-          import 'dart:math' as math;
           import 'dart:typed_data';
           import 'package:collection/collection.dart';
           import 'package:excel/excel.dart' as xls;
@@ -112,13 +111,42 @@ jobs:
             ResultRow(this.row,this.colorClass,this.bm,this.oppLabel);
           }
 
+          // ---------- THEME (ظاهر حرفه‌ای) ----------
           class CTRColorApp extends StatelessWidget {
             const CTRColorApp({super.key});
             @override
             Widget build(BuildContext context) {
+              final base = ThemeData(
+                colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
+                useMaterial3: true,
+              );
               return MaterialApp(
                 title: 'CTR Color App',
-                theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal), useMaterial3: true),
+                theme: base.copyWith(
+                  scaffoldBackgroundColor: const Color(0xFFF7FAF9),
+                  appBarTheme: base.appBarTheme.copyWith(
+                    elevation: 0,
+                    backgroundColor: const Color(0xFFE9F5F2),
+                    titleTextStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 20, color: Colors.teal),
+                    iconTheme: const IconThemeData(color: Colors.teal),
+                  ),
+                  cardTheme: const CardTheme(
+                    margin: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(18))),
+                  ),
+                  chipTheme: base.chipTheme.copyWith(
+                    shape: const StadiumBorder(),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    labelStyle: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  listTileTheme: const ListTileThemeData(
+                    contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    titleTextStyle: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                    subtitleTextStyle: TextStyle(fontSize: 13),
+                  ),
+                  dividerColor: Colors.black12,
+                ),
                 home: const HomeScreen(),
                 locale: const Locale('fa'),
               );
@@ -156,11 +184,13 @@ jobs:
               });
             }
 
+            // ---------- Parsers ----------
             String _normDigits(String s){ const m={'۰':'0','۱':'1','۲':'2','۳':'3','۴':'4','۵':'5','۶':'6','۷':'7','۸':'8','۹':'9','٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9'}; var o=s; m.forEach((k,v)=>o=o.replaceAll(k,v)); return o; }
             double _num(String v){ try{ var s=_normDigits(v.trim()).replaceAll('%','').replaceAll('٪','').replaceAll(',','').replaceAll('٬','').replaceAll('،','').replaceAll('٫','.'); return double.parse(s);}catch(_){ return double.nan; } }
             double _ctr(String v) => _num(v);
             String _fmt(double x){ if (x.isNaN) return ''; final isInt = x.truncateToDouble()==x; return isInt ? x.toStringAsFixed(0) : x.toStringAsFixed(2); }
 
+            // ---------- Load Excel ----------
             Future<void> _pickExcel() async{
               try{
                 setState(()=>{_excel=null,_headers=[],_table=[],_colText=null,_colCTR=null,_colPos=null,_colImp=null,_colClk=null,_benchmarks=[],_bmFromSheet=false,_results=[],_bmSheetName=null});
@@ -250,6 +280,7 @@ jobs:
               return issues;
             }
 
+            // ---------- رنگ‌بندی CTR نسبت به بنچمارک ----------
             ColorClass _classify(double ctr, Benchmark bm){
               final tol = _tolerance; final minT=bm.minCTR, maxT=bm.maxCTR;
               final minStrong = minT * (1 - tol);
@@ -263,7 +294,7 @@ jobs:
 
             double _posAdv(double pos) => (pos > 0 && pos <= 10) ? (10 - pos) / 9.0 : 0.0;
 
-            // ------------------- NEW SCORE FUNCTION (Hybrid) -------------------
+            // ---------- امتیاز فرصت (فرمول نهایی) ----------
             // Opportunity = w_ctr * (Gap/CTR_expected) * Impr  +  w_rank * ((MaxPos-Pos)/MaxPos) * Impr
             double _oppScore({
               required double ctr,
@@ -275,13 +306,12 @@ jobs:
               int maxPos = 10,
             }){
               final ctrExpected = (bm.minCTR + bm.maxCTR) / 2.0;
-              final gap = ctrExpected - ctr; // اگر مثبت باشد یعنی ظرفیت رشد CTR
+              final gap = ctrExpected - ctr; // + یعنی ظرفیت رشد CTR
               final ctrPart = gap > 0 ? wCtr * (gap / ctrExpected) * impr : 0.0;
               final posPart = (pos > 0 && pos <= maxPos) ? wRank * ((maxPos - pos) / maxPos) * impr : 0.0;
               return ctrPart + posPart;
             }
 
-            // برچسب‌ها بر اساس صدک امتیاز و شرط موقعیت
             String _oppLabel({
               required double score,
               required double posAdv,
@@ -291,13 +321,12 @@ jobs:
               required bool gapPositive,
             }){
               if(!hasBenchmark) return 'Needs Benchmark';
-              if(!gapPositive) return 'Protect Top'; // CTR بالاتر از انتظار است → دستکاری بزرگ نکن
+              if(!gapPositive) return 'Protect Top';
               if (score >= p80) return posAdv >= 0.6 ? 'Quick Win' : 'High Opportunity';
               if (score >= p60) return 'Moderate Growth';
               return 'Low Potential';
             }
 
-            // صدک خطی
             double _percentile(List<double> data, double p){
               if (data.isEmpty) return 0.0;
               final list = [...data]..sort();
@@ -309,11 +338,126 @@ jobs:
               return list[lo] + (list[hi]-list[lo]) * frac;
             }
 
+            // ---------- رنگ پس‌زمینه کارت‌ها ----------
+            Color _bandColor(ColorClass c){
+              switch(c){
+                case ColorClass.redStrong:   return const Color(0xFFFFCDD2);
+                case ColorClass.redLight:    return const Color(0xFFFFEBEE);
+                case ColorClass.gray:        return const Color(0xFFECEFF1);
+                case ColorClass.greenLight:  return const Color(0xFFB7E4C7);
+                case ColorClass.greenStrong: return const Color(0xFF9BE7C4);
+                case ColorClass.warn:        return const Color(0xFFFFEBA0);
+              }
+            }
+
+            // ---------- برچسب Opportunity: رنگ/آیکون ----------
+            Color _labelColor(String lbl){
+              switch (lbl) {
+                case 'Quick Win': return const Color(0xFF2E7D32);
+                case 'High Opportunity': return const Color(0xFF1E88E5);
+                case 'Moderate Growth': return const Color(0xFFFB8C00);
+                case 'Low Potential': return const Color(0xFF8D6E63);
+                case 'Protect Top': return const Color(0xFF00796B);
+                default: return Colors.grey.shade700;
+              }
+            }
+            IconData _labelIcon(String lbl){
+              switch (lbl) {
+                case 'Quick Win': return Icons.bolt;
+                case 'High Opportunity': return Icons.trending_up;
+                case 'Moderate Growth': return Icons.trending_flat;
+                case 'Low Potential': return Icons.trending_down;
+                case 'Protect Top': return Icons.shield;
+                default: return Icons.info_outline;
+              }
+            }
+            Widget _kpiChip(String label, String value) {
+              return Chip(
+                label: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text('$label: ', style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Text(value),
+                ]),
+                backgroundColor: Colors.white,
+                side: const BorderSide(color: Color(0xFFE0E0E0)),
+              );
+            }
+
+            // ---------- کارت شیک هر صفحه ----------
+            Widget _pageCard(ResultRow r){
+              final uri = Uri.tryParse(r.row.text);
+              final host = uri?.host.isNotEmpty == true ? uri!.host : r.row.text;
+              final path = (uri != null && (uri.path.isNotEmpty)) ? uri.path : '';
+              final c = _ctr(r.row.ctrRaw);
+              final p = _num(r.row.posRaw);
+              final im = _num(r.row.impRaw);
+              final ck = _num(r.row.clkRaw);
+              final bg = _bandColor(r.colorClass);
+
+              return Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topRight, end: Alignment.bottomLeft,
+                    colors: [bg.withOpacity(0.88), bg],
+                  ),
+                  borderRadius: const BorderRadius.all(Radius.circular(18)),
+                  border: Border.all(color: Colors.black12),
+                  boxShadow: const [BoxShadow(color: Color(0x14000000), blurRadius: 8, offset: Offset(0, 4))],
+                ),
+                margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SelectableText.rich(
+                      TextSpan(children: [
+                        TextSpan(text: host, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                        if (path.isNotEmpty) const TextSpan(text: '  '),
+                        if (path.isNotEmpty) TextSpan(text: path, style: TextStyle(color: Colors.black.withOpacity(0.65))),
+                      ]),
+                      textDirection: TextDirection.ltr,
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8, runSpacing: 8,
+                      children: [
+                        _kpiChip('CTR', _fmt(c)),
+                        _kpiChip('Position', _fmt(p)),
+                        _kpiChip('Impr', _fmt(im)),
+                        _kpiChip('Clicks', _fmt(ck)),
+                        Chip(
+                          avatar: Icon(_labelIcon(r.oppLabel), size: 18, color: Colors.white),
+                          label: Text('Opportunity: ${r.oppLabel}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                          backgroundColor: _labelColor(r.oppLabel),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        IconButton(tooltip:'Open', icon: const Icon(Icons.open_in_new_rounded), onPressed: () async{
+                          final u = Uri.tryParse(r.row.text);
+                          if(u!=null) await launchUrl(u, mode: LaunchMode.externalApplication);
+                        }),
+                        const SizedBox(width: 4),
+                        IconButton(tooltip:'Copy', icon: const Icon(Icons.copy_rounded), onPressed: () async {
+                          await Clipboard.setData(ClipboardData(text: r.row.text));
+                          _snack('لینک کپی شد');
+                        }),
+                        const SizedBox(width: 4),
+                        IconButton(tooltip:'Analyze', icon: const Icon(Icons.insights_rounded), onPressed: ()=>_analyzeOne(r)),
+                        const Spacer(),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            // ---------- محاسبه ----------
             void _compute(){
               final issues = _validateData();
               if (issues.isNotEmpty){ _showIssues(issues); return; }
 
-              // وزن‌ها از اسلایدر:  wRank = _rankBias, wCtr = 1 - _rankBias
               final wRank = _rankBias.clamp(0.0, 1.0);
               final wCtr  = (1.0 - _rankBias).clamp(0.0, 1.0);
 
@@ -389,6 +533,34 @@ jobs:
               setState(()=>_results=out);
             }
 
+            // ---------- UI: فیلترها به‌شکل ChoiceChip ----------
+            Widget _filtersGrid(BuildContext context, List<MapEntry<String, ColorClass?>> items){
+              return Wrap(
+                spacing: 8, runSpacing: 8,
+                children: items.map((e){
+                  final band = e.value;
+                  final selected = band==null ? _filterBands.isEmpty : _filterBands.contains(band);
+                  return ChoiceChip(
+                    label: Text(e.key),
+                    selected: selected,
+                    onSelected: (_){
+                      setState(() {
+                        if (band == null) { _filterBands.clear(); }
+                        else {
+                          if (_filterBands.contains(band)) _filterBands.remove(band);
+                          else _filterBands.add(band);
+                        }
+                      });
+                    },
+                    selectedColor: Colors.teal.shade100,
+                    backgroundColor: Colors.white,
+                    side: const BorderSide(color: Color(0xFFE0E0E0)),
+                  );
+                }).toList(),
+              );
+            }
+
+            // ---------- Helper ----------
             void _showIssues(List<String> issues){
               showDialog(context: context, builder: (_){
                 return Directionality(textDirection: TextDirection.rtl, child: AlertDialog(
@@ -398,6 +570,7 @@ jobs:
                 ));
               });
             }
+            void _snack(String m)=>ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
             Future<void> _analyzeOne(ResultRow r) async {
               final String aiUrl = (_customAiUrl?.isNotEmpty==true) ? _customAiUrl! : kAiProxyUrl;
@@ -474,100 +647,7 @@ jobs:
               });
             }
 
-            void _snack(String m)=>ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
-
-            Color _bandColor(ColorClass c){
-              switch(c){
-                case ColorClass.redStrong:   return Colors.red.shade200;
-                case ColorClass.redLight:    return Colors.red.shade100;
-                case ColorClass.gray:        return Colors.grey.shade300;
-                case ColorClass.greenLight:  return const Color(0xFFB7E4C7);
-                case ColorClass.greenStrong: return const Color(0xFF9BE7C4);
-                case ColorClass.warn:        return const Color(0xFFFFEBA0);
-              }
-            }
-
-            Color _btnColor(ColorClass? band, bool selected){
-              switch(band){
-                case null:                     return selected? Colors.grey.shade500 : Colors.grey.shade400; // All
-                case ColorClass.redStrong:     return selected? Colors.red.shade500  : Colors.red.shade400; // Worst
-                case ColorClass.redLight:      return selected? Colors.red.shade300  : Colors.red.shade200; // Bad
-                case ColorClass.gray:          return selected? Colors.grey.shade400 : Colors.grey.shade300; // Neutral
-                case ColorClass.greenLight:    return selected? Colors.green.shade300: Colors.green.shade200; // Good
-                case ColorClass.greenStrong:   return selected? Colors.green.shade400: Colors.green.shade300; // Best
-                case ColorClass.warn:          return selected? Colors.amber.shade300: Colors.amber.shade200; // Warn
-              }
-            }
-
-            Widget _filtersGrid(BuildContext context, List<MapEntry<String, ColorClass?>> items){
-              final w = MediaQuery.of(context).size.width;
-              const outerPad = 24.0;
-              const gap = 8.0;
-              final cellW = (w - outerPad - gap*3) / 4;
-
-              List<Widget> btns = items.map((e){
-                final label = e.key; final band = e.value;
-                final selected = band==null ? _filterBands.isEmpty : _filterBands.contains(band);
-                final bg = _btnColor(band, selected);
-                return SizedBox(
-                  width: cellW, height: 40,
-                  child: OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      backgroundColor: bg,
-                      foregroundColor: Colors.teal.shade900,
-                      side: const BorderSide(color: Colors.black12),
-                      padding: EdgeInsets.zero,
-                    ),
-                    onPressed: (){
-                      setState(() {
-                        if (band == null) { _filterBands.clear(); }
-                        else {
-                          if (_filterBands.contains(band)) _filterBands.remove(band);
-                          else _filterBands.add(band);
-                        }
-                      });
-                    },
-                    child: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
-                  ),
-                );
-              }).toList();
-
-              return Column(
-                children: [
-                  Row(children: [ for (int i=0;i<4;i++) Padding(padding: const EdgeInsets.only(right: gap), child: btns[i]) ]),
-                  const SizedBox(height: gap),
-                  Row(children: [ for (int i=4;i<7;i++) Padding(padding: const EdgeInsets.only(right: gap), child: btns[i]) ]),
-                ],
-              );
-            }
-
-            List<ResultRow> get _visible {
-              var list = _results.where((r){
-                final matchQuery = _query.isEmpty || r.row.text.toLowerCase().contains(_query.toLowerCase());
-                final matchBand  = _filterBands.isEmpty || _filterBands.contains(r.colorClass);
-                return matchQuery && matchBand;
-              }).toList();
-
-              list.sort((a,b){
-                final ca=_ctr(a.row.ctrRaw), cb=_ctr(b.row.ctrRaw);
-                final pa=_num(a.row.posRaw), pb=_num(b.row.posRaw);
-                final ia=_num(a.row.impRaw), ib=_num(b.row.impRaw);
-                final ka=_num(a.row.clkRaw), kb=_num(b.row.clkRaw);
-                switch(_sort){
-                  case 'posAsc':  return pa.compareTo(pb);
-                  case 'posDesc': return pb.compareTo(pa);
-                  case 'ctrAsc':  return ca.compareTo(cb);
-                  case 'ctrDesc': return cb.compareTo(ca);
-                  case 'impAsc':  return ia.compareTo(ib);
-                  case 'impDesc': return ib.compareTo(ia);
-                  case 'clkAsc':  return ka.compareTo(kb);
-                  case 'clkDesc': return kb.compareTo(ka);
-                }
-                return 0;
-              });
-              return list;
-            }
-
+            // ---------- صفحه ----------
             @override Widget build(BuildContext context){
               final rS=_results.where((r)=>r.colorClass==ColorClass.redStrong).length;
               final rL=_results.where((r)=>r.colorClass==ColorClass.redLight).length;
@@ -585,6 +665,35 @@ jobs:
                 MapEntry('Best ($gS)', ColorClass.greenStrong),
                 MapEntry('Warn ($wn)', ColorClass.warn),
               ];
+
+              List<ResultRow> visible() {
+                var list = _results.where((r){
+                  final matchQuery = _query.isEmpty || r.row.text.toLowerCase().contains(_query.toLowerCase());
+                  final matchBand  = _filterBands.isEmpty || _filterBands.contains(r.colorClass);
+                  return matchQuery && matchBand;
+                }).toList();
+
+                list.sort((a,b){
+                  final ca=_ctr(a.row.ctrRaw), cb=_ctr(b.row.ctrRaw);
+                  final pa=_num(a.row.posRaw), pb=_num(b.row.posRaw);
+                  final ia=_num(a.row.impRaw), ib=_num(b.row.impRaw);
+                  final ka=_num(a.row.clkRaw), kb=_num(b.row.clkRaw);
+                  switch(_sort){
+                    case 'posAsc':  return pa.compareTo(pb);
+                    case 'posDesc': return pb.compareTo(pa);
+                    case 'ctrAsc':  return ca.compareTo(cb);
+                    case 'ctrDesc': return cb.compareTo(ca);
+                    case 'impAsc':  return ia.compareTo(ib);
+                    case 'impDesc': return ib.compareTo(ia);
+                    case 'clkAsc':  return ka.compareTo(kb);
+                    case 'clkDesc': return kb.compareTo(ka);
+                  }
+                  return 0;
+                });
+                return list;
+              }
+
+              final _visible = visible();
 
               return Scaffold(
                 appBar: AppBar(
@@ -609,6 +718,7 @@ jobs:
                       const SizedBox(width:12),
                       DropdownButton<String>(
                         value: _sort,
+                        underline: const SizedBox.shrink(),
                         items: const [
                           DropdownMenuItem(value:'posAsc',  child: Text('Pos ↑')),
                           DropdownMenuItem(value:'posDesc', child: Text('Pos ↓')),
@@ -651,43 +761,7 @@ jobs:
                     if(_results.isNotEmpty) ListView.builder(
                       shrinkWrap:true, physics:const NeverScrollableScrollPhysics(),
                       itemCount:_visible.length,
-                      itemBuilder:(ctx,i){
-                        final r=_visible[i];
-                        final bg=_bandColor(r.colorClass);
-                        final c=_ctr(r.row.ctrRaw), p=_num(r.row.posRaw), im=_num(r.row.impRaw), ck=_num(r.row.clkRaw);
-                        return Card(color:bg, child: ListTile(
-                          title: Text(r.row.text, softWrap:true),
-                          subtitle: Padding(
-                            padding: const EdgeInsets.only(top:6),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(children: [
-                                  Text('CTR: ${_fmt(c)}'), const SizedBox(width: 16), const Text('|'), const SizedBox(width: 16),
-                                  Text('Position: ${_fmt(p)}'),
-                                ]),
-                                const SizedBox(height:4),
-                                Row(children: [
-                                  Text('Impr: ${_fmt(im)}'), const SizedBox(width: 16), const Text('|'), const SizedBox(width: 16),
-                                  Text('Clicks: ${_fmt(ck)}'), const SizedBox(width: 16), const Text('|'), const SizedBox(width: 16),
-                                  Text('Opportunity: ${r.oppLabel}'),
-                                ]),
-                              ],
-                            ),
-                          ),
-                          trailing: Wrap(spacing:6, children: [
-                            IconButton(tooltip:'Open', icon: const Icon(Icons.open_in_new), onPressed: () async{
-                              final uri = Uri.tryParse(r.row.text);
-                              if(uri!=null) await launchUrl(uri, mode: LaunchMode.externalApplication);
-                            }),
-                            IconButton(tooltip:'Copy', icon: const Icon(Icons.copy), onPressed: () async {
-                              await Clipboard.setData(ClipboardData(text: r.row.text));
-                              _snack('لینک کپی شد');
-                            }),
-                            IconButton(tooltip:'Analyze', icon: const Icon(Icons.insights), onPressed: ()=>_analyzeOne(r)),
-                          ]),
-                        ));
-                      }
+                      itemBuilder:(ctx,i)=>_pageCard(_visible[i]),
                     ),
                     const SizedBox(height:12),
                     Text('Tolerance: ${(_tolerance*100).toStringAsFixed(0)}%'),
@@ -696,6 +770,7 @@ jobs:
               );
             }
 
+            // ---------- Settings ----------
             void _openSettings(){
               final ctrl = TextEditingController(text: _customAiUrl ?? '');
               showDialog(context: context, builder: (_){
