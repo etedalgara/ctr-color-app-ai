@@ -337,7 +337,7 @@ jobs:
               }
               if (badCtr > 0) issues.add('Invalid CTR in $badCtr row(s).');
               if (badPos > 0) issues.add('Invalid Position in $badPos row(s).');
-              if (badImp > 0) issues add('Invalid Impressions in $badImp row(s).');
+              if (badImp > 0) issues.add('Invalid Impressions in $badImp row(s).');
               if (badClk > 0) issues.add('Invalid Clicks in $badClk row(s).');
               if (_benchmarks.isEmpty) issues.add('Benchmarks are missing. Add a "Benchmarks" sheet.');
               return issues;
