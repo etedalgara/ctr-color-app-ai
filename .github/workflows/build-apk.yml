@@ -23,7 +23,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.22.2'
-          channel: 'stable'
+          channel: stable
 
       - name: Create Flutter app
         run: |
@@ -436,7 +436,7 @@ jobs:
               }
             }
 
-            // -------- KPI chip (خوانا در لایت/دارک)
+            // -------- KPI chip
             Widget _kpiChip(BuildContext context, String label, String value) {
               final cs = Theme.of(context).colorScheme;
               final isDark = Theme.of(context).brightness==Brightness.dark;
@@ -444,7 +444,7 @@ jobs:
                 label: Row(mainAxisSize: MainAxisSize.min, children: [
                   Text('$label: ', style: TextStyle(fontWeight: FontWeight.w600, color: cs.onSurface)),
                   Text(value, style: TextStyle(color: cs.onSurface)),
-                ]),
+                ]), 
                 backgroundColor: isDark ? cs.surfaceVariant.withOpacity(0.35) : Colors.white,
                 side: BorderSide(color: cs.outline.withOpacity(0.3)),
               );
@@ -460,6 +460,7 @@ jobs:
               final im = _num(r.row.impRaw);
               final ck = _num(r.row.clkRaw);
               final bg = _bandColor(r.colorClass);
+              final isDark = Theme.of(context).brightness == Brightness.dark;
 
               return Container(
                 decoration: BoxDecoration(
@@ -480,7 +481,10 @@ jobs:
                       TextSpan(children: [
                         TextSpan(text: host, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
                         if (path.isNotEmpty) const TextSpan(text: '  '),
-                        if (path.isNotEmpty) TextSpan(text: path, style: TextStyle(color: Colors.white.withOpacity(0.85))),
+                        if (path.isNotEmpty) TextSpan(
+                          text: path,
+                          style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
+                        ),
                       ]),
                       textDirection: TextDirection.ltr,
                     ),
@@ -635,6 +639,9 @@ jobs:
                     },
                     selectedColor: baseColor,
                     backgroundColor: baseColor.withOpacity(0.6),
+                    showCheckmark: false,
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   );
                 }).toList(),
               );
@@ -778,7 +785,19 @@ jobs:
               return Scaffold(
                 appBar: AppBar(
                   title: const Text('CTR Color App'),
-                  actions: [ IconButton(onPressed:_openSettings, icon: const Icon(Icons.settings)) ],
+                  actions: [
+                    IconButton(
+                      tooltip: 'Toggle Dark/Light',
+                      icon: Icon(Theme.of(context).brightness == Brightness.dark
+                          ? Icons.light_mode
+                          : Icons.dark_mode),
+                      onPressed: () {
+                        final isDark = Theme.of(context).brightness == Brightness.dark;
+                        widget.onChangeTheme(isDark ? ThemeMode.light : ThemeMode.dark);
+                      },
+                    ),
+                    IconButton(onPressed:_openSettings, icon: const Icon(Icons.settings)),
+                  ],
                 ),
                 body: Padding(
                   padding: const EdgeInsets.all(12),
@@ -850,7 +869,7 @@ jobs:
               );
             }
 
-            // -------- Settings dialog (includes Theme)
+            // -------- Settings dialog (Theme picker removed)
             void _openSettings(){
               final ctrl = TextEditingController(text: _customAiUrl ?? '');
               showDialog(context: context, builder: (_){
@@ -858,9 +877,6 @@ jobs:
                   builder: (ctx, setS) {
                     final wRank = _rankBias;
                     final wCTR = 1.0 - _rankBias;
-                    ThemeMode currentTheme = (context.findAncestorWidgetOfExactType<CTRColorApp>() as CTRColorApp?) == null
-                      ? ThemeMode.system
-                      : (widget.currentTheme);
 
                     return AlertDialog(
                       title: const Text('تنظیمات'),
@@ -882,21 +898,6 @@ jobs:
                           onChanged: (v)=> setS(()=>_rankBias=v),
                         ),
                         Row(children:[const Text('Rank Growth'), const Spacer(), Text('${(wRank*100).toStringAsFixed(0)}%')]),
-                        const SizedBox(height:12),
-                        const Divider(),
-                        const SizedBox(height:8),
-                        const Text('ظاهر (Appearance):'),
-                        const SizedBox(height:8),
-                        DropdownButton<ThemeMode>(
-                          value: currentTheme,
-                          isExpanded: true,
-                          items: const [
-                            DropdownMenuItem(value: ThemeMode.system, child: Text('System Default')),
-                            DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
-                            DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
-                          ],
-                          onChanged: (m){ if(m!=null){ setS((){ currentTheme=m; }); } },
-                        ),
                       ]),
                       actions: [
                         TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('Cancel')),
@@ -907,7 +908,6 @@ jobs:
                           else { await sp.setString(_kPrefsAiUrl, v); setState(()=>_customAiUrl=v); }
                           await sp.setDouble(_kPrefsTol, _tolerance);
                           await sp.setDouble(_kPrefsBalance, _rankBias);
-                          widget.onChangeTheme(currentTheme);
                           if(mounted) setState((){});
                           Navigator.pop(context);
                         }, child: const Text('Save'))
